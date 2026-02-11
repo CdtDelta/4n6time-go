@@ -1,0 +1,1 @@
+export declare const iconSetQuartzCSS = ".ag-icon:before{background-color:currentColor;content:\"\";display:block;height:var(--ag-icon-size);-webkit-mask-image:linear-gradient(#0000,#0000);mask-image:linear-gradient(#0000,#0000);-webkit-mask-size:contain;mask-size:contain;width:var(--ag-icon-size)}";

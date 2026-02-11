@@ -1,0 +1,53 @@
+import { BeanStub } from '../../context/beanStub';
+import type { BeanCollection } from '../../context/context';
+import type { AgColumn } from '../../entities/agColumn';
+import type { AgColumnGroup } from '../../entities/agColumnGroup';
+import type { ScrollPartner } from '../../gridBodyComp/gridBodyScrollFeature';
+import type { ColumnPinnedType } from '../../interfaces/iColumn';
+import { HeaderRowType } from '../row/headerRowComp';
+import { HeaderRowCtrl } from '../row/headerRowCtrl';
+export interface IHeaderRowContainerComp {
+    setCenterWidth(width: string): void;
+    setViewportScrollLeft(left: number): void;
+    setPinnedContainerWidth(width: string): void;
+    setDisplayed(displayed: boolean): void;
+    setCtrls(ctrls: HeaderRowCtrl[]): void;
+}
+export declare class HeaderRowContainerCtrl extends BeanStub implements ScrollPartner {
+    private ctrlsService;
+    private scrollVisibleService;
+    private pinnedWidthService;
+    private columnModel;
+    private focusService;
+    private filterManager?;
+    wireBeans(beans: BeanCollection): void;
+    private pinned;
+    private comp;
+    private hidden;
+    private includeFloatingFilter;
+    private filtersRowCtrl;
+    private columnsRowCtrl;
+    private groupsRowCtrls;
+    private eViewport;
+    constructor(pinned: ColumnPinnedType);
+    setComp(comp: IHeaderRowContainerComp, eGui: HTMLElement): void;
+    getAllCtrls(): HeaderRowCtrl[];
+    refresh(keepColumns?: boolean): void;
+    getHeaderCtrlForColumn(column: AgColumn | AgColumnGroup): any;
+    getHtmlElementForColumnHeader(column: AgColumn | AgColumnGroup): HTMLElement | null;
+    getRowType(rowIndex: number): HeaderRowType | undefined;
+    focusHeader(rowIndex: number, column: AgColumn | AgColumnGroup, event?: KeyboardEvent): boolean;
+    getViewportElement(): HTMLElement;
+    getGroupRowCount(): number;
+    getGroupRowCtrlAtIndex(index: number): HeaderRowCtrl;
+    getRowCount(): number;
+    setHorizontalScroll(offset: number): void;
+    onScrollCallback(fn: () => void): void;
+    destroy(): void;
+    private setupDragAndDrop;
+    private restoreFocusOnHeader;
+    private onGridColumnsChanged;
+    private onDisplayedColumnsChanged;
+    private setupCenterWidth;
+    private setupPinnedWidth;
+}

@@ -1,0 +1,36 @@
+# Build output
+build/bin/
+build/appicon.png
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# Wails generated bindings (regenerated on build)
+frontend/wailsjs/go/main/App.d.ts
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test databases
+*.db
+
+# Docker
+.docker/

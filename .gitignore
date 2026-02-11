@@ -1,0 +1,21 @@
+# Binaries
+4n6time
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# Test databases
+testdata/*.db

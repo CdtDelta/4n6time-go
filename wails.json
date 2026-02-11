@@ -1,0 +1,12 @@
+{
+  "name": "4n6time",
+  "outputfilename": "4n6time",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "wailsjsdir": "./frontend",
+  "author": {
+    "name": "Tom Yarrish"
+  }
+}
