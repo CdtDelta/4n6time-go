@@ -200,11 +200,12 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
-	Filters  []FilterItem `json:"filters"`
-	Logic    string       `json:"logic"`
-	OrderBy  string       `json:"orderBy"`
-	Page     int          `json:"page"`
-	PageSize int          `json:"pageSize"`
+	Filters    []FilterItem `json:"filters"`
+	Logic      string       `json:"logic"`
+	OrderBy    string       `json:"orderBy"`
+	Page       int          `json:"page"`
+	PageSize   int          `json:"pageSize"`
+	SearchText string       `json:"searchText"`
 }
 
 type FilterItem struct {
@@ -260,6 +261,26 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		}
 		p := query.Simple(f.Field, op, f.Value)
 		q.AddPredicate(p)
+	}
+
+	// Full-text search across key columns
+	if req.SearchText != "" {
+		searchFields := []string{
+			"desc", "filename", "source", "sourcetype", "type",
+			"user", "host", "extra", "tag", "url", "source_name",
+			"computer_name", "format", "notes",
+		}
+		var searchPreds []*query.Predicate
+		for _, field := range searchFields {
+			p := query.Simple(field, query.Like, req.SearchText)
+			if p != nil {
+				searchPreds = append(searchPreds, p)
+			}
+		}
+		if len(searchPreds) > 0 {
+			combined := query.Combine(searchPreds, query.OR)
+			q.AddPredicate(combined)
+		}
 	}
 
 	// Order by
@@ -459,6 +480,21 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 			whereParts = append(whereParts, fmt.Sprintf("%s %s ?", f.Field, f.Operator))
 			whereArgs = append(whereArgs, f.Value)
 		}
+	}
+
+	// Full-text search for histogram
+	if req.SearchText != "" {
+		searchFields := []string{
+			"desc", "filename", "source", "sourcetype", "type",
+			"user", "host", "extra", "tag", "url", "source_name",
+			"computer_name", "format", "notes",
+		}
+		var orParts []string
+		for _, field := range searchFields {
+			orParts = append(orParts, fmt.Sprintf("%s LIKE ?", field))
+			whereArgs = append(whereArgs, "%"+req.SearchText+"%")
+		}
+		whereParts = append(whereParts, "("+strings.Join(orParts, " OR ")+")")
 	}
 
 	logic := "AND"

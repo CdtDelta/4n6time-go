@@ -258,7 +258,7 @@ func (db *DB) CountEvents(whereClause string, args []interface{}) (int64, error)
 // excluding the sentinel value '0000-00-00 00:00:00'.
 func (db *DB) GetMinMaxDate() (minDate, maxDate string, err error) {
 	err = db.conn.QueryRow(
-		"SELECT COALESCE(min(datetime), ''), COALESCE(max(datetime), '') FROM log2timeline WHERE datetime <> '0000-00-00 00:00:00'",
+		"SELECT COALESCE(min(datetime), ''), COALESCE(max(datetime), '') FROM log2timeline WHERE datetime > '1970-01-01' AND datetime < '2100-01-01'",
 	).Scan(&minDate, &maxDate)
 	return
 }

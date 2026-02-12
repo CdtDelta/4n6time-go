@@ -125,6 +125,7 @@ const themes = {
       '--color-phase-inactive': '#ccc',
       '--color-bar-fill': '#1976d2',
       '--color-group-label': '#1565c0',
+      '--color-scheme': 'light',
       '--ag-bg': '#ffffff',
       '--ag-header-bg': '#f0f0f0',
       '--ag-odd-row-bg': '#fafafa',

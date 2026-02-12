@@ -11,6 +11,8 @@ import SavedQueries from './components/SavedQueries'
 import ColumnChooser from './components/ColumnChooser'
 import TimelineChart from './components/TimelineChart'
 import ThemePicker from './components/ThemePicker'
+import AboutDialog from './components/AboutDialog'
+import HelpDialog from './components/HelpDialog'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
@@ -56,6 +58,10 @@ function App() {
   const [showColumnChooser, setShowColumnChooser] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
   const [showThemePicker, setShowThemePicker] = useState(false)
+  const [searchText, setSearchText] = useState('')
+  const [activeSearch, setActiveSearch] = useState('')
+  const [showAbout, setShowAbout] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
   const [currentTheme, setCurrentTheme] = useState(() => {
     try { return window.localStorage?.getItem('4n6time-theme') || 'forensic-dark' }
     catch { return 'forensic-dark' }
@@ -111,6 +117,7 @@ function App() {
       orderBy: 'datetime',
       page: page,
       pageSize: PAGE_SIZE,
+      searchText: activeSearch,
     }
 
     const fs = filterState || activeFilters
@@ -128,7 +135,7 @@ function App() {
     }
 
     return req
-  }, [activeFilters])
+  }, [activeFilters, activeSearch])
 
   const loadPage = useCallback(async (page, info, filterState) => {
     const db = info || dbInfo
@@ -147,7 +154,8 @@ function App() {
 
         const filterCount = (filterState || activeFilters)?.filters?.length || 0
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
-        setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}`)
+        const searchLabel = activeSearch ? ` | Search: "${activeSearch}"` : ''
+        setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}`)
       }
     } catch (err) {
       setStatus('Error: ' + err)
@@ -234,6 +242,26 @@ function App() {
     setSelectedEvent(null)
     loadPage(1, null, { filters: [], logic: 'AND', dateFrom: '', dateTo: '' })
   }, [loadPage])
+
+  const handleSearch = useCallback(() => {
+    setActiveSearch(searchText)
+    setCurrentPage(1)
+    setSelectedEvent(null)
+  }, [searchText])
+
+  const handleClearSearch = useCallback(() => {
+    setSearchText('')
+    setActiveSearch('')
+    setCurrentPage(1)
+    setSelectedEvent(null)
+  }, [])
+
+  // Reload when activeSearch changes
+  useEffect(() => {
+    if (dbInfo) {
+      loadPage(1)
+    }
+  }, [activeSearch]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFilters = useCallback(() => {
     setShowFilters(prev => !prev)
@@ -397,12 +425,24 @@ function App() {
     const cancelClose = EventsOn('menu:close-database', () => { handleCloseDB() })
     const cancelExport = EventsOn('menu:export-csv', () => { handleExportCSV() })
     const cancelTheme = EventsOn('menu:theme', () => { setShowThemePicker(true) })
+    const cancelCut = EventsOn('menu:cut', () => { document.execCommand('cut') })
+    const cancelCopy = EventsOn('menu:copy', () => { document.execCommand('copy') })
+    const cancelPaste = EventsOn('menu:paste', () => { document.execCommand('paste') })
+    const cancelSelectAll = EventsOn('menu:select-all', () => { document.execCommand('selectAll') })
+    const cancelAbout = EventsOn('menu:about', () => { setShowAbout(true) })
+    const cancelHelp = EventsOn('menu:help', () => { setShowHelp(true) })
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
       if (typeof cancelClose === 'function') cancelClose()
       if (typeof cancelExport === 'function') cancelExport()
       if (typeof cancelTheme === 'function') cancelTheme()
+      if (typeof cancelCut === 'function') cancelCut()
+      if (typeof cancelCopy === 'function') cancelCopy()
+      if (typeof cancelPaste === 'function') cancelPaste()
+      if (typeof cancelSelectAll === 'function') cancelSelectAll()
+      if (typeof cancelAbout === 'function') cancelAbout()
+      if (typeof cancelHelp === 'function') cancelHelp()
     }
   }, [handleOpenDB, handleImportCSV, handleCloseDB, handleExportCSV])
 
@@ -433,6 +473,21 @@ function App() {
     return (
       <div className="app-container">
         <ImportProgress visible={importing} />
+        <ThemePicker
+          visible={showThemePicker}
+          currentTheme={currentTheme}
+          onSelect={handleSelectTheme}
+          onClose={() => setShowThemePicker(false)}
+        />
+        <AboutDialog
+          visible={showAbout}
+          version={version}
+          onClose={() => setShowAbout(false)}
+        />
+        <HelpDialog
+          visible={showHelp}
+          onClose={() => setShowHelp(false)}
+        />
         <div className="welcome">
           <h1>4n6time</h1>
           <p>Forensic Timeline Viewer</p>
@@ -478,6 +533,20 @@ function App() {
           Timeline
         </button>
         <div className="toolbar-separator" />
+        <div className="search-bar">
+          <input
+            type="text"
+            placeholder="Search events..."
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
+          />
+          {activeSearch && (
+            <button className="search-clear" onClick={handleClearSearch} title="Clear search">x</button>
+          )}
+          <button className="search-btn" onClick={handleSearch}>Search</button>
+        </div>
+        <div className="toolbar-separator" />
         <button onClick={handleExportCSV}>Export CSV</button>
         <span className="db-info">
           {dbInfo.path} | {dbInfo.eventCount.toLocaleString()} events
@@ -497,6 +566,17 @@ function App() {
         currentTheme={currentTheme}
         onSelect={handleSelectTheme}
         onClose={() => setShowThemePicker(false)}
+      />
+
+      <AboutDialog
+        visible={showAbout}
+        version={version}
+        onClose={() => setShowAbout(false)}
+      />
+
+      <HelpDialog
+        visible={showHelp}
+        onClose={() => setShowHelp(false)}
       />
 
       <div className="main-content">

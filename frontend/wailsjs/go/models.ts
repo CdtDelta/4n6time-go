@@ -59,6 +59,7 @@ export namespace main {
 	    orderBy: string;
 	    page: number;
 	    pageSize: number;
+	    searchText: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryRequest(source);
@@ -71,6 +72,7 @@ export namespace main {
 	        this.orderBy = source["orderBy"];
 	        this.page = source["page"];
 	        this.pageSize = source["pageSize"];
+	        this.searchText = source["searchText"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

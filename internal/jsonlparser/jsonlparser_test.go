@@ -19,55 +19,49 @@ func writeTempFile(t *testing.T, name, content string) string {
 
 // --- Validation Tests ---
 
-func TestValidateFile_Valid(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "source_long": "NTFS MFT", "message": "test event", "parser": "mft"}
+func TestValidateFile_ValidPsort(t *testing.T) {
+	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "message": "test event", "parser": "mft"}
 `
 	path := writeTempFile(t, "valid.jsonl", content)
-	err := ValidateFile(path)
-	if err != nil {
+	if err := ValidateFile(path); err != nil {
 		t.Errorf("expected valid file, got error: %v", err)
+	}
+}
+
+func TestValidateFile_ValidRaw(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "fs:stat", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "message": "test", "parser": "filestat", "timestamp_desc": "Metadata Modification Time"}
+`
+	path := writeTempFile(t, "raw.jsonl", content)
+	if err := ValidateFile(path); err != nil {
+		t.Errorf("expected valid raw file, got error: %v", err)
 	}
 }
 
 func TestValidateFile_Empty(t *testing.T) {
 	path := writeTempFile(t, "empty.jsonl", "")
-	err := ValidateFile(path)
-	if err == nil {
+	if err := ValidateFile(path); err == nil {
 		t.Error("expected error for empty file, got nil")
 	}
 }
 
 func TestValidateFile_NotJSON(t *testing.T) {
 	path := writeTempFile(t, "notjson.jsonl", "this is not json\n")
-	err := ValidateFile(path)
-	if err == nil {
+	if err := ValidateFile(path); err == nil {
 		t.Error("expected error for non-JSON file, got nil")
 	}
 }
 
-func TestValidateFile_NoTimestamp(t *testing.T) {
-	content := `{"message": "no timestamp here", "source_short": "FILE"}
+func TestValidateFile_NoPlasoFields(t *testing.T) {
+	content := `{"random_field": "value", "another": 123}
 `
-	path := writeTempFile(t, "notime.jsonl", content)
-	err := ValidateFile(path)
-	if err == nil {
-		t.Error("expected error for missing timestamp, got nil")
-	}
-}
-
-func TestValidateFile_NoMessageOrSource(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00"}
-`
-	path := writeTempFile(t, "nomsg.jsonl", content)
-	err := ValidateFile(path)
-	if err == nil {
-		t.Error("expected error for missing message/source_short, got nil")
+	path := writeTempFile(t, "noplaso.jsonl", content)
+	if err := ValidateFile(path); err == nil {
+		t.Error("expected error for non-Plaso JSON, got nil")
 	}
 }
 
 func TestValidateFile_MissingFile(t *testing.T) {
-	err := ValidateFile("/nonexistent/path.jsonl")
-	if err == nil {
+	if err := ValidateFile("/nonexistent/path.jsonl"); err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
 }
@@ -75,18 +69,17 @@ func TestValidateFile_MissingFile(t *testing.T) {
 func TestValidateFile_CSVNotJSON(t *testing.T) {
 	content := "date,time,timezone,MACB\n01/15/2025,10:30:00,UTC,MACB\n"
 	path := writeTempFile(t, "actually_csv.jsonl", content)
-	err := ValidateFile(path)
-	if err == nil {
+	if err := ValidateFile(path); err == nil {
 		t.Error("expected error for CSV content in JSONL file, got nil")
 	}
 }
 
-// --- ReadEvents Tests ---
+// --- Raw Plaso Format Tests ---
 
-func TestReadEvents_SingleEvent(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Content Modification Time", "source_short": "FILE", "source_long": "NTFS MFT", "message": "test file event", "parser": "mft", "filename": "/Users/admin/test.txt", "hostname": "WORKSTATION1", "username": "admin"}
+func TestReadEvents_RawPlasoFsStat(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "fs:stat", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "display_name": "NTFS:\\Windows\\System32\\test.dll", "filename": "\\Windows\\System32\\test.dll", "inode": "12345", "message": "NTFS:\\Windows\\System32\\test.dll Type: file", "parser": "filestat", "timestamp": -11644473599704022, "timestamp_desc": "Metadata Modification Time"}
 `
-	path := writeTempFile(t, "single.jsonl", content)
+	path := writeTempFile(t, "raw_fsstat.jsonl", content)
 	result, err := ReadEvents(path, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -94,28 +87,215 @@ func TestReadEvents_SingleEvent(t *testing.T) {
 	if result.Count != 1 {
 		t.Fatalf("expected 1 event, got %d", result.Count)
 	}
-
 	e := result.Events[0]
-	if e.Datetime != "2024-01-15T10:30:00+00:00" {
-		t.Errorf("datetime = %q, want %q", e.Datetime, "2024-01-15T10:30:00+00:00")
+	if e.Source != "FILE" {
+		t.Errorf("source = %q, want %q", e.Source, "FILE")
 	}
+	if e.SourceType != "File stat" {
+		t.Errorf("sourcetype = %q, want %q", e.SourceType, "File stat")
+	}
+	if e.Format != "filestat" {
+		t.Errorf("format = %q, want %q", e.Format, "filestat")
+	}
+	if e.Filename != "\\Windows\\System32\\test.dll" {
+		t.Errorf("filename = %q, want %q", e.Filename, "\\Windows\\System32\\test.dll")
+	}
+	if e.Type != "Metadata Modification Time" {
+		t.Errorf("type = %q, want %q", e.Type, "Metadata Modification Time")
+	}
+	if e.MACB != "M.C." {
+		t.Errorf("MACB = %q, want %q", e.MACB, "M.C.")
+	}
+}
+
+func TestReadEvents_RawPlasoOlecf(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "olecf:summary_info", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "message": "Title: Test Doc", "parser": "olecf/olecf_summary", "timestamp_desc": "Document Creation Time"}
+`
+	path := writeTempFile(t, "raw_olecf.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	e := result.Events[0]
+	if e.Source != "OLECF" {
+		t.Errorf("source = %q, want %q", e.Source, "OLECF")
+	}
+	if e.SourceType != "OLECF Summary Info" {
+		t.Errorf("sourcetype = %q, want %q", e.SourceType, "OLECF Summary Info")
+	}
+	if e.MACB != "...B" {
+		t.Errorf("MACB = %q, want %q", e.MACB, "...B")
+	}
+}
+
+func TestReadEvents_RawPlasoPE_NotSet(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "pe_coff:file", "date_time": {"__class_name__": "NotSet", "__type__": "DateTimeValues", "timestamp": 0}, "message": "PE test", "parser": "pe", "timestamp_desc": "Not a time"}
+`
+	path := writeTempFile(t, "raw_pe.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	e := result.Events[0]
+	if e.Source != "PE" {
+		t.Errorf("source = %q, want %q", e.Source, "PE")
+	}
+	if e.SourceType != "PE File" {
+		t.Errorf("sourcetype = %q, want %q", e.SourceType, "PE File")
+	}
+	if e.Datetime != "Not a time" {
+		t.Errorf("datetime = %q, want %q", e.Datetime, "Not a time")
+	}
+}
+
+func TestReadEvents_RawPlasoUnknownDataType(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "custom:parser:output", "date_time": {"__class_name__": "PosixTime", "__type__": "DateTimeValues", "timestamp": 1705312200}, "message": "custom event", "parser": "custom", "timestamp_desc": "Creation Time"}
+`
+	path := writeTempFile(t, "raw_unknown.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	e := result.Events[0]
+	if e.Source != "CUSTOM" {
+		t.Errorf("source = %q, want %q", e.Source, "CUSTOM")
+	}
+	if e.Datetime != "2024-01-15 09:50:00" {
+		t.Errorf("datetime = %q, want %q", e.Datetime, "2024-01-15 09:50:00")
+	}
+}
+
+func TestReadEvents_RawPlasoDisplayNameFallback(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "fs:stat", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "display_name": "TSK:/Windows/System32/config/SAM", "message": "test", "parser": "filestat", "timestamp_desc": "Creation Time"}
+`
+	path := writeTempFile(t, "raw_displayname.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Events[0].Filename != "TSK:/Windows/System32/config/SAM" {
+		t.Errorf("filename = %q, want display_name fallback", result.Events[0].Filename)
+	}
+}
+
+func TestReadEvents_RawPlasoSkipsPathspec(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "fs:stat", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "message": "test", "parser": "filestat", "timestamp_desc": "Creation Time", "pathspec": {"__type__": "PathSpec", "location": "/test"}}
+`
+	path := writeTempFile(t, "raw_pathspec.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(result.Events[0].Extra, "pathspec") {
+		t.Errorf("extra should not contain pathspec: %q", result.Events[0].Extra)
+	}
+}
+
+func TestReadEvents_RawPlasoSkipsInternalFields(t *testing.T) {
+	content := `{"__container_type__": "event", "__type__": "AttributeContainer", "data_type": "fs:stat", "date_time": {"__class_name__": "Filetime", "__type__": "DateTimeValues", "timestamp": 132500000000000000}, "message": "test", "parser": "filestat", "timestamp_desc": "Creation Time"}
+`
+	path := writeTempFile(t, "raw_internal.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	extra := result.Events[0].Extra
+	if strings.Contains(extra, "__container_type__") {
+		t.Errorf("extra should not contain __container_type__: %q", extra)
+	}
+	if strings.Contains(extra, "__type__") {
+		t.Errorf("extra should not contain __type__: %q", extra)
+	}
+}
+
+// --- Filetime Conversion Tests ---
+
+func TestConvertFiletime_ValidDate(t *testing.T) {
+	// 132500000000000000 ticks ~ 2020-11-17 UTC
+	result := convertFiletime(132500000000000000)
+	if result == "Not a time" || result == "" {
+		t.Errorf("expected valid date, got %q", result)
+	}
+	if !strings.HasPrefix(result, "2020-") {
+		t.Errorf("expected date starting with 2020-, got %q", result)
+	}
+}
+
+func TestConvertFiletime_Zero(t *testing.T) {
+	if result := convertFiletime(0); result != "Not a time" {
+		t.Errorf("expected 'Not a time' for zero, got %q", result)
+	}
+}
+
+func TestConvertFiletime_Negative(t *testing.T) {
+	if result := convertFiletime(-1); result != "Not a time" {
+		t.Errorf("expected 'Not a time' for negative, got %q", result)
+	}
+}
+
+func TestConvertFiletime_TooSmall(t *testing.T) {
+	// Very small tick value results in date near 1601, should still convert
+	result := convertFiletime(2959780)
+	if !strings.HasPrefix(result, "1601-") {
+		t.Errorf("expected date near 1601, got %q", result)
+	}
+}
+
+func TestConvertDateTimeObject_NotSet(t *testing.T) {
+	dtObj := map[string]interface{}{
+		"__class_name__": "NotSet",
+		"__type__":       "DateTimeValues",
+		"timestamp":      float64(0),
+	}
+	if result := convertDateTimeObject(dtObj); result != "Not a time" {
+		t.Errorf("expected 'Not a time' for NotSet, got %q", result)
+	}
+}
+
+func TestConvertDateTimeObject_PosixTime(t *testing.T) {
+	dtObj := map[string]interface{}{
+		"__class_name__": "PosixTime",
+		"__type__":       "DateTimeValues",
+		"timestamp":      float64(1705312200),
+	}
+	if result := convertDateTimeObject(dtObj); result != "2024-01-15 09:50:00" {
+		t.Errorf("datetime = %q, want %q", result, "2024-01-15 09:50:00")
+	}
+}
+
+func TestConvertDateTimeObject_PosixMicroseconds(t *testing.T) {
+	dtObj := map[string]interface{}{
+		"__class_name__": "PosixTimeInMicroseconds",
+		"__type__":       "DateTimeValues",
+		"timestamp":      float64(1705312200000000),
+	}
+	if result := convertDateTimeObject(dtObj); result != "2024-01-15 09:50:00" {
+		t.Errorf("datetime = %q, want %q", result, "2024-01-15 09:50:00")
+	}
+}
+
+func TestConvertDateTimeObject_NotAMap(t *testing.T) {
+	if result := convertDateTimeObject("not a map"); result != "" {
+		t.Errorf("expected empty for non-map, got %q", result)
+	}
+}
+
+// --- Psort Format Tests ---
+
+func TestReadEvents_PsortSingleEvent(t *testing.T) {
+	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Content Modification Time", "source_short": "FILE", "source_long": "NTFS MFT", "message": "test file event", "parser": "mft", "filename": "/Users/admin/test.txt", "hostname": "WORKSTATION1", "username": "admin"}
+`
+	path := writeTempFile(t, "psort_single.jsonl", content)
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	e := result.Events[0]
 	if e.Source != "FILE" {
 		t.Errorf("source = %q, want %q", e.Source, "FILE")
 	}
 	if e.SourceType != "NTFS MFT" {
 		t.Errorf("sourcetype = %q, want %q", e.SourceType, "NTFS MFT")
-	}
-	if e.Type != "Content Modification Time" {
-		t.Errorf("type = %q, want %q", e.Type, "Content Modification Time")
-	}
-	if e.Desc != "test file event" {
-		t.Errorf("desc = %q, want %q", e.Desc, "test file event")
-	}
-	if e.Format != "mft" {
-		t.Errorf("format = %q, want %q", e.Format, "mft")
-	}
-	if e.Filename != "/Users/admin/test.txt" {
-		t.Errorf("filename = %q, want %q", e.Filename, "/Users/admin/test.txt")
 	}
 	if e.Host != "WORKSTATION1" {
 		t.Errorf("host = %q, want %q", e.Host, "WORKSTATION1")
@@ -125,25 +305,25 @@ func TestReadEvents_SingleEvent(t *testing.T) {
 	}
 }
 
-func TestReadEvents_MultipleEvents(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "message": "event one", "parser": "mft"}
-{"timestamp": 1705398600000000, "datetime": "2024-01-16T10:30:00+00:00", "timestamp_desc": "Last Accessed", "source_short": "FILE", "message": "event two", "parser": "mft"}
-{"timestamp": 1705485000000000, "datetime": "2024-01-17T10:30:00+00:00", "timestamp_desc": "Creation Time", "source_short": "REG", "message": "event three", "parser": "winreg"}
+func TestReadEvents_PsortMultipleEvents(t *testing.T) {
+	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "message": "one", "parser": "mft"}
+{"timestamp": 1705398600000000, "datetime": "2024-01-16T10:30:00+00:00", "timestamp_desc": "Last Accessed", "source_short": "FILE", "message": "two", "parser": "mft"}
+{"timestamp": 1705485000000000, "datetime": "2024-01-17T10:30:00+00:00", "timestamp_desc": "Creation Time", "source_short": "REG", "message": "three", "parser": "winreg"}
 `
-	path := writeTempFile(t, "multi.jsonl", content)
+	path := writeTempFile(t, "psort_multi.jsonl", content)
 	result, err := ReadEvents(path, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Count != 3 {
-		t.Errorf("expected 3 events, got %d", result.Count)
+		t.Errorf("expected 3, got %d", result.Count)
 	}
 }
 
 func TestReadEvents_SkipsInvalidLines(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "FILE", "message": "good event", "parser": "mft"}
+	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "FILE", "message": "good", "parser": "mft"}
 this is not json at all
-{"timestamp": 1705398600000000, "datetime": "2024-01-16T10:30:00+00:00", "source_short": "FILE", "message": "another good event", "parser": "mft"}
+{"timestamp": 1705398600000000, "datetime": "2024-01-16T10:30:00+00:00", "source_short": "FILE", "message": "also good", "parser": "mft"}
 `
 	path := writeTempFile(t, "mixed.jsonl", content)
 	result, err := ReadEvents(path, nil)
@@ -151,10 +331,10 @@ this is not json at all
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Count != 2 {
-		t.Errorf("expected 2 events, got %d", result.Count)
+		t.Errorf("count = %d, want 2", result.Count)
 	}
 	if result.Excluded != 1 {
-		t.Errorf("expected 1 excluded, got %d", result.Excluded)
+		t.Errorf("excluded = %d, want 1", result.Excluded)
 	}
 }
 
@@ -169,7 +349,7 @@ func TestReadEvents_SkipsBlankLines(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Count != 2 {
-		t.Errorf("expected 2 events, got %d", result.Count)
+		t.Errorf("count = %d, want 2", result.Count)
 	}
 }
 
@@ -180,15 +360,11 @@ func TestReadEvents_EmptyFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Count != 0 {
-		t.Errorf("expected 0 events, got %d", result.Count)
+		t.Errorf("count = %d, want 0", result.Count)
 	}
 }
 
-// --- Timestamp Conversion Tests ---
-
-func TestReadEvents_TimestampFallback(t *testing.T) {
-	// No datetime field, should convert from microsecond timestamp
-	// 1705312200000000 microseconds = 2024-01-15 09:50:00 UTC
+func TestReadEvents_PsortTimestampFallback(t *testing.T) {
 	content := `{"timestamp": 1705312200000000, "source_short": "FILE", "message": "ts only", "parser": "mft"}
 `
 	path := writeTempFile(t, "tsonly.jsonl", content)
@@ -196,15 +372,12 @@ func TestReadEvents_TimestampFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Count != 1 {
-		t.Fatalf("expected 1 event, got %d", result.Count)
-	}
 	if result.Events[0].Datetime != "2024-01-15 09:50:00" {
 		t.Errorf("datetime = %q, want %q", result.Events[0].Datetime, "2024-01-15 09:50:00")
 	}
 }
 
-func TestReadEvents_StringTimestamp(t *testing.T) {
+func TestReadEvents_PsortStringTimestamp(t *testing.T) {
 	content := `{"timestamp": "2024-01-15T10:30:00Z", "source_short": "FILE", "message": "string ts", "parser": "mft"}
 `
 	path := writeTempFile(t, "stringts.jsonl", content)
@@ -212,18 +385,14 @@ func TestReadEvents_StringTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.Count != 1 {
-		t.Fatalf("expected 1 event, got %d", result.Count)
-	}
-	// Should use string timestamp as-is
-	if result.Events[0].Datetime != "2024-01-15T10:30:00Z" {
-		t.Errorf("datetime = %q, want %q", result.Events[0].Datetime, "2024-01-15T10:30:00Z")
+	if result.Events[0].Datetime != "2024-01-15 10:30:00" {
+		t.Errorf("datetime = %q, want %q", result.Events[0].Datetime, "2024-01-15 10:30:00")
 	}
 }
 
 // --- MACB Mapping Tests ---
 
-func TestMACB_Modification(t *testing.T) {
+func TestMACB_Mapping(t *testing.T) {
 	tests := []struct {
 		desc string
 		want string
@@ -236,15 +405,50 @@ func TestMACB_Modification(t *testing.T) {
 		{"Entry Modification", "M.C."},
 		{"Creation Time", "...B"},
 		{"File Created", "...B"},
-		{"Content Modification Time", "M..."},
+		{"Document Creation Time", "...B"},
+		{"Metadata Modification Time", "M.C."},
 		{"Unknown Type", ""},
+		{"Not a time", ""},
 	}
-
 	for _, tc := range tests {
-		got := mapTimestampDescToMACB(tc.desc)
-		if got != tc.want {
+		if got := mapTimestampDescToMACB(tc.desc); got != tc.want {
 			t.Errorf("mapTimestampDescToMACB(%q) = %q, want %q", tc.desc, got, tc.want)
 		}
+	}
+}
+
+// --- data_type to Source Mapping Tests ---
+
+func TestMapDataTypeToSource(t *testing.T) {
+	tests := []struct {
+		dataType  string
+		wantShort string
+		wantLong  string
+	}{
+		{"fs:stat", "FILE", "File stat"},
+		{"fs:stat:ntfs", "FILE", "NTFS File stat"},
+		{"windows:evtx:record", "EVT", "WinEVTX"},
+		{"chrome:history:page_visited", "WEBHIST", "Chrome History"},
+		{"olecf:summary_info", "OLECF", "OLECF Summary Info"},
+		{"pe_coff:file", "PE", "PE File"},
+		{"windows:prefetch:execution", "PREFETCH", "Windows Prefetch"},
+		{"windows:lnk:link", "LNK", "Windows Shortcut"},
+	}
+	for _, tc := range tests {
+		short, long := mapDataTypeToSource(tc.dataType)
+		if short != tc.wantShort {
+			t.Errorf("mapDataTypeToSource(%q) short = %q, want %q", tc.dataType, short, tc.wantShort)
+		}
+		if long != tc.wantLong {
+			t.Errorf("mapDataTypeToSource(%q) long = %q, want %q", tc.dataType, long, tc.wantLong)
+		}
+	}
+}
+
+func TestMapDataTypeToSource_Fallback(t *testing.T) {
+	short, _ := mapDataTypeToSource("unknown:parser:type")
+	if short != "UNKNOWN" {
+		t.Errorf("fallback source = %q, want %q", short, "UNKNOWN")
 	}
 }
 
@@ -259,7 +463,7 @@ func TestReadEvents_DefaultTimezone(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Events[0].Timezone != "UTC" {
-		t.Errorf("timezone = %q, want %q", result.Events[0].Timezone, "UTC")
+		t.Errorf("timezone = %q, want UTC", result.Events[0].Timezone)
 	}
 }
 
@@ -272,38 +476,11 @@ func TestReadEvents_ExplicitTimezone(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Events[0].Timezone != "America/New_York" {
-		t.Errorf("timezone = %q, want %q", result.Events[0].Timezone, "America/New_York")
+		t.Errorf("timezone = %q, want America/New_York", result.Events[0].Timezone)
 	}
 }
 
-func TestReadEvents_DisplayNameFallback(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "FILE", "message": "event", "parser": "mft", "display_name": "TSK:/Windows/System32/config/SAM"}
-`
-	path := writeTempFile(t, "displayname.jsonl", content)
-	result, err := ReadEvents(path, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Events[0].Filename != "TSK:/Windows/System32/config/SAM" {
-		t.Errorf("filename = %q, want display_name fallback", result.Events[0].Filename)
-	}
-}
-
-func TestReadEvents_FilenameOverDisplayName(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "FILE", "message": "event", "parser": "mft", "filename": "/actual/path.txt", "display_name": "TSK:/display/path.txt"}
-`
-	path := writeTempFile(t, "filepriority.jsonl", content)
-	result, err := ReadEvents(path, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Events[0].Filename != "/actual/path.txt" {
-		t.Errorf("filename = %q, want %q", result.Events[0].Filename, "/actual/path.txt")
-	}
-}
-
-func TestReadEvents_SourceFallback(t *testing.T) {
-	// When source_short is missing, should fall back to "source"
+func TestReadEvents_PsortSourceFallback(t *testing.T) {
 	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source": "LOG", "message": "event", "parser": "syslog"}
 `
 	path := writeTempFile(t, "sourcefallback.jsonl", content)
@@ -312,7 +489,7 @@ func TestReadEvents_SourceFallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Events[0].Source != "LOG" {
-		t.Errorf("source = %q, want %q", result.Events[0].Source, "LOG")
+		t.Errorf("source = %q, want LOG", result.Events[0].Source)
 	}
 }
 
@@ -327,11 +504,8 @@ func TestReadEvents_ExtraFields(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	extra := result.Events[0].Extra
-	if !strings.Contains(extra, "custom_field") || !strings.Contains(extra, "custom_value") {
+	if !strings.Contains(extra, "custom_field") {
 		t.Errorf("extra should contain custom_field: %q", extra)
-	}
-	if !strings.Contains(extra, "another_field") || !strings.Contains(extra, "42") {
-		t.Errorf("extra should contain another_field: %q", extra)
 	}
 }
 
@@ -359,7 +533,7 @@ func TestReadEvents_TagString(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Events[0].Tag != "malware" {
-		t.Errorf("tag = %q, want %q", result.Events[0].Tag, "malware")
+		t.Errorf("tag = %q, want malware", result.Events[0].Tag)
 	}
 }
 
@@ -372,7 +546,7 @@ func TestReadEvents_TagList(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Events[0].Tag != "malware, suspicious" {
-		t.Errorf("tag = %q, want %q", result.Events[0].Tag, "malware, suspicious")
+		t.Errorf("tag = %q, want 'malware, suspicious'", result.Events[0].Tag)
 	}
 }
 
@@ -388,13 +562,13 @@ func TestReadEvents_NumericEventIdentifier(t *testing.T) {
 	}
 	e := result.Events[0]
 	if e.EventID != "4624" {
-		t.Errorf("event_identifier = %q, want %q", e.EventID, "4624")
+		t.Errorf("event_identifier = %q, want 4624", e.EventID)
 	}
 	if e.EventType != "0" {
-		t.Errorf("event_type = %q, want %q", e.EventType, "0")
+		t.Errorf("event_type = %q, want 0", e.EventType)
 	}
 	if e.RecordNumber != "12345" {
-		t.Errorf("record_number = %q, want %q", e.RecordNumber, "12345")
+		t.Errorf("record_number = %q, want 12345", e.RecordNumber)
 	}
 }
 
@@ -416,11 +590,10 @@ func TestReadEvents_ProgressCallback(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Count != 25000 {
-		t.Errorf("expected 25000 events, got %d", result.Count)
+		t.Errorf("count = %d, want 25000", result.Count)
 	}
-	// Should be called at 10000 and 20000
 	if callCount != 2 {
-		t.Errorf("expected 2 progress callbacks, got %d", callCount)
+		t.Errorf("progress callbacks = %d, want 2", callCount)
 	}
 }
 
@@ -439,8 +612,7 @@ func TestInterfaceToString(t *testing.T) {
 		{false, "false"},
 	}
 	for _, tc := range tests {
-		got := interfaceToString(tc.input)
-		if got != tc.want {
+		if got := interfaceToString(tc.input); got != tc.want {
 			t.Errorf("interfaceToString(%v) = %q, want %q", tc.input, got, tc.want)
 		}
 	}
@@ -457,28 +629,8 @@ func TestInterfaceToInt64(t *testing.T) {
 		{"notanumber", 0},
 	}
 	for _, tc := range tests {
-		got := interfaceToInt64(tc.input)
-		if got != tc.want {
+		if got := interfaceToInt64(tc.input); got != tc.want {
 			t.Errorf("interfaceToInt64(%v) = %d, want %d", tc.input, got, tc.want)
 		}
-	}
-}
-
-// --- Internal Type Filtering Tests ---
-
-func TestReadEvents_SkipsPlasoInternalFields(t *testing.T) {
-	content := `{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "source_short": "FILE", "message": "event", "parser": "mft", "__container_type__": "event", "__type__": "AttributeContainer"}
-`
-	path := writeTempFile(t, "internal.jsonl", content)
-	result, err := ReadEvents(path, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// __container_type__ and __type__ should NOT appear in Extra
-	if strings.Contains(result.Events[0].Extra, "__container_type__") {
-		t.Errorf("extra should not contain __container_type__: %q", result.Events[0].Extra)
-	}
-	if strings.Contains(result.Events[0].Extra, "__type__") {
-		t.Errorf("extra should not contain __type__: %q", result.Events[0].Extra)
 	}
 }

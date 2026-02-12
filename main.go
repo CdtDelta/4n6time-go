@@ -40,14 +40,31 @@ func main() {
 	})
 
 	editMenu := appMenu.AddSubmenu("Edit")
-	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), nil)
-	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), nil)
-	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), nil)
-	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), nil)
+	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:cut")
+	})
+	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:copy")
+	})
+	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:paste")
+	})
+	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:select-all")
+	})
 
 	viewMenu := appMenu.AddSubmenu("View")
 	viewMenu.AddText("Theme...", keys.CmdOrCtrl("t"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:theme")
+	})
+
+	helpMenu := appMenu.AddSubmenu("Help")
+	helpMenu.AddText("User Guide", keys.Key("F1"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:help")
+	})
+	helpMenu.AddSeparator()
+	helpMenu.AddText("About 4n6time", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:about")
 	})
 
 	err := wails.Run(&options.App{
