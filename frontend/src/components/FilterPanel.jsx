@@ -1,13 +1,22 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetDistinctValues, GetMinMaxDate } from '../../wailsjs/go/main/App'
 
-function FilterPanel({ visible, onApply, onClear, dbInfo }) {
+function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters }) {
   const [filters, setFilters] = useState([])
   const [logic, setLogic] = useState('AND')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [distinctValues, setDistinctValues] = useState({})
   const [loading, setLoading] = useState(false)
+
+  // Sync local state when activeFilters change externally (e.g. timeline selection)
+  useEffect(() => {
+    if (!activeFilters) return
+    if (activeFilters.dateFrom) setDateFrom(activeFilters.dateFrom)
+    if (activeFilters.dateTo) setDateTo(activeFilters.dateTo)
+    if (activeFilters.filters) setFilters(activeFilters.filters)
+    if (activeFilters.logic) setLogic(activeFilters.logic)
+  }, [activeFilters])
 
   // Filterable fields and their display names
   const filterFields = [

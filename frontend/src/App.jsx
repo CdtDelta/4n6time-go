@@ -505,6 +505,7 @@ function App() {
           onApply={handleApplyFilters}
           onClear={handleClearFilters}
           dbInfo={dbInfo}
+          activeFilters={activeFilters}
         />
 
         <SavedQueries
