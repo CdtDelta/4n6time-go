@@ -178,7 +178,7 @@ function App() {
   const handleImportCSV = useCallback(async () => {
     try {
       setImporting(true)
-      setStatus('Importing CSV...')
+      setStatus('Importing timeline...')
       const info = await ImportCSV()
       if (info) {
         setDbInfo(info)
@@ -438,7 +438,7 @@ function App() {
           <p>Forensic Timeline Viewer</p>
           <div className="actions">
             <button onClick={handleOpenDB}>Open Database</button>
-            <button onClick={handleImportCSV}>Import CSV</button>
+            <button onClick={handleImportCSV}>Import Timeline</button>
           </div>
         </div>
         <div className="status-bar">
@@ -455,7 +455,7 @@ function App() {
 
       <div className="toolbar">
         <button onClick={handleOpenDB}>Open</button>
-        <button onClick={handleImportCSV}>Import CSV</button>
+        <button onClick={handleImportCSV}>Import</button>
         <button onClick={handleCloseDB}>Close</button>
         <div className="toolbar-separator" />
         <button

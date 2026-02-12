@@ -34,7 +34,7 @@ function ImportProgress({ visible }) {
 
         <div className="import-phase">
           <span className={`phase-dot ${progress.phase === 'reading' ? 'active' : progress.phase !== 'reading' && progress.count > 0 ? 'done' : ''}`} />
-          <span>Read CSV</span>
+          <span>Read file</span>
         </div>
         <div className="import-phase">
           <span className={`phase-dot ${progress.phase === 'inserting' ? 'active' : progress.phase === 'metadata' || progress.phase === 'done' ? 'done' : ''}`} />

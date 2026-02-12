@@ -23,7 +23,7 @@ func main() {
 	fileMenu.AddText("Open Database", keys.CmdOrCtrl("o"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:open-database")
 	})
-	fileMenu.AddText("Import CSV", keys.CmdOrCtrl("i"), func(cd *menu.CallbackData) {
+	fileMenu.AddText("Import Timeline...", keys.CmdOrCtrl("i"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:import-csv")
 	})
 	fileMenu.AddSeparator()

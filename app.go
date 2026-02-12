@@ -8,6 +8,7 @@ import (
 
 	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
+	"github.com/cdtdelta/4n6time/internal/jsonlparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/query"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -67,12 +68,14 @@ func (a *App) OpenDatabase() (*DBInfo, error) {
 	return a.loadDatabase(path)
 }
 
-// ImportCSV opens a file dialog for a CSV, creates a new database, and imports events.
+// ImportCSV opens a file dialog for a CSV or JSONL file, creates a new database, and imports events.
 func (a *App) ImportCSV() (*DBInfo, error) {
 	csvPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Import L2T CSV File",
+		Title: "Import Timeline File",
 		Filters: []runtime.FileFilter{
+			{DisplayName: "Timeline Files (*.csv, *.jsonl)", Pattern: "*.csv;*.jsonl"},
 			{DisplayName: "CSV Files (*.csv)", Pattern: "*.csv"},
+			{DisplayName: "JSONL Files (*.jsonl)", Pattern: "*.jsonl"},
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
 	})
@@ -83,9 +86,18 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		return nil, nil
 	}
 
-	// Validate the CSV header before doing anything
-	if err := csvparser.ValidateHeader(csvPath); err != nil {
-		return nil, fmt.Errorf("invalid CSV file: %w", err)
+	ext := strings.ToLower(filepath.Ext(csvPath))
+	isJSONL := ext == ".jsonl" || ext == ".json"
+
+	// Validate the file before doing anything
+	if isJSONL {
+		if err := jsonlparser.ValidateFile(csvPath); err != nil {
+			return nil, fmt.Errorf("invalid JSONL file: %w", err)
+		}
+	} else {
+		if err := csvparser.ValidateHeader(csvPath); err != nil {
+			return nil, fmt.Errorf("invalid CSV file: %w", err)
+		}
 	}
 
 	// Ask where to save the database
@@ -115,26 +127,49 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		return nil, fmt.Errorf("creating database: %w", err)
 	}
 
-	// Read the CSV
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "reading", "message": "Reading CSV file...", "count": 0, "total": 0,
-	})
-	result, err := csvparser.ReadEvents(csvPath, "", "", 0, func(count int) {
+	// Read the file
+	var events []*model.Event
+	formatName := "CSV"
+	if isJSONL {
+		formatName = "JSONL"
+	}
+
+	if isJSONL {
 		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+			"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
 		})
-	})
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("reading CSV: %w", err)
+		result, err := jsonlparser.ReadEvents(csvPath, func(count int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+			})
+		})
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("reading JSONL: %w", err)
+		}
+		events = result.Events
+	} else {
+		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
+		})
+		result, err := csvparser.ReadEvents(csvPath, "", "", 0, func(count int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+			})
+		})
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("reading CSV: %w", err)
+		}
+		events = result.Events
 	}
 
 	// Insert into database
-	total := len(result.Events)
+	total := len(events)
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 		"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
 	})
-	_, err = db.InsertEvents(result.Events, func(count int) {
+	_, err = db.InsertEvents(events, func(count int) {
 		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 			"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
 		})
