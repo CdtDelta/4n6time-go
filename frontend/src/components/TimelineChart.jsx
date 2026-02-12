@@ -158,6 +158,12 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange }) {
 
   if (!visible) return null
 
+  // Read theme colors from CSS variables for recharts
+  const style = getComputedStyle(document.documentElement)
+  const barFill = style.getPropertyValue('--color-bar-fill').trim() || '#533483'
+  const borderColor = style.getPropertyValue('--border-primary').trim() || '#0f3460'
+  const mutedColor = style.getPropertyValue('--text-muted').trim() || '#808080'
+
   return (
     <div className="timeline-chart">
       <div className="timeline-header">
@@ -176,25 +182,25 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange }) {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#0f3460" vertical={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={borderColor} vertical={false} />
               <XAxis
                 dataKey="label"
-                tick={{ fill: '#808080', fontSize: 10 }}
+                tick={{ fill: mutedColor, fontSize: 10 }}
                 tickLine={false}
-                axisLine={{ stroke: '#0f3460' }}
+                axisLine={{ stroke: borderColor }}
                 interval="preserveStartEnd"
               />
               <YAxis
-                tick={{ fill: '#808080', fontSize: 10 }}
+                tick={{ fill: mutedColor, fontSize: 10 }}
                 tickLine={false}
                 axisLine={false}
                 width={50}
                 tickFormatter={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}
               />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(83, 52, 131, 0.2)' }} />
+              <Tooltip content={<CustomTooltip />} cursor={{ fill: barFill + '33' }} />
               <Bar
                 dataKey="count"
-                fill="#533483"
+                fill={barFill}
                 radius={[2, 2, 0, 0]}
                 isAnimationActive={false}
               />
@@ -203,7 +209,7 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange }) {
                   x1={refAreaLeft}
                   x2={refAreaRight}
                   strokeOpacity={0.3}
-                  fill="rgba(123, 94, 167, 0.3)"
+                  fill={barFill + '4D'}
                 />
               )}
             </BarChart>

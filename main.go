@@ -45,6 +45,11 @@ func main() {
 	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), nil)
 	editMenu.AddText("Select All", keys.CmdOrCtrl("a"), nil)
 
+	viewMenu := appMenu.AddSubmenu("View")
+	viewMenu.AddText("Theme...", keys.CmdOrCtrl("t"), func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:theme")
+	})
+
 	err := wails.Run(&options.App{
 		Title:  "4n6time v" + Version + " - Forensic Timeline Viewer",
 		Width:  1400,

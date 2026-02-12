@@ -10,6 +10,8 @@ import EventDetail from './components/EventDetail'
 import SavedQueries from './components/SavedQueries'
 import ColumnChooser from './components/ColumnChooser'
 import TimelineChart from './components/TimelineChart'
+import ThemePicker from './components/ThemePicker'
+import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
 
@@ -53,7 +55,34 @@ function App() {
   const [showSavedQueries, setShowSavedQueries] = useState(false)
   const [showColumnChooser, setShowColumnChooser] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
+  const [showThemePicker, setShowThemePicker] = useState(false)
+  const [currentTheme, setCurrentTheme] = useState(() => {
+    try { return window.localStorage?.getItem('4n6time-theme') || 'forensic-dark' }
+    catch { return 'forensic-dark' }
+  })
   const [columnDefs, setColumnDefs] = useState(defaultColDefs)
+
+  // Apply theme CSS variables to document root
+  const applyTheme = useCallback((themeId) => {
+    const theme = themes[themeId]
+    if (!theme) return
+    const root = document.documentElement
+    Object.entries(theme.vars).forEach(([key, value]) => {
+      root.style.setProperty(key, value)
+    })
+  }, [])
+
+  // Apply theme on mount and when changed
+  useEffect(() => {
+    applyTheme(currentTheme)
+  }, [currentTheme, applyTheme])
+
+  const handleSelectTheme = useCallback((themeId) => {
+    setCurrentTheme(themeId)
+    try { window.localStorage?.setItem('4n6time-theme', themeId) }
+    catch { /* ignore */ }
+    setShowThemePicker(false)
+  }, [])
   const [activeFilters, setActiveFilters] = useState(null)
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [detailHeight, setDetailHeight] = useState(280)
@@ -367,11 +396,13 @@ function App() {
     const cancelImport = EventsOn('menu:import-csv', () => { handleImportCSV() })
     const cancelClose = EventsOn('menu:close-database', () => { handleCloseDB() })
     const cancelExport = EventsOn('menu:export-csv', () => { handleExportCSV() })
+    const cancelTheme = EventsOn('menu:theme', () => { setShowThemePicker(true) })
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
       if (typeof cancelClose === 'function') cancelClose()
       if (typeof cancelExport === 'function') cancelExport()
+      if (typeof cancelTheme === 'function') cancelTheme()
     }
   }, [handleOpenDB, handleImportCSV, handleCloseDB, handleExportCSV])
 
@@ -461,6 +492,13 @@ function App() {
         onClose={() => setShowColumnChooser(false)}
       />
 
+      <ThemePicker
+        visible={showThemePicker}
+        currentTheme={currentTheme}
+        onSelect={handleSelectTheme}
+        onClose={() => setShowThemePicker(false)}
+      />
+
       <div className="main-content">
         <FilterPanel
           visible={showFilters}
@@ -484,7 +522,7 @@ function App() {
             onSelectRange={handleTimelineSelectRange}
           />
 
-          <div className="grid-container ag-theme-alpine-dark">
+          <div className={`grid-container ${lightThemes.has(currentTheme) ? 'ag-theme-alpine' : 'ag-theme-alpine-dark'}`}>
             <AgGridReact
               ref={gridRef}
               rowData={events}
