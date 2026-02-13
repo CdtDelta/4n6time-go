@@ -4,18 +4,33 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ## Features
 
-- Import L2T CSV and Plaso JSONL files (tested with 2GB+ files, millions of events)
+- Import L2T CSV, Plaso JSONL, TLN, L2TTLN, and dynamic CSV files (tested with 2GB+ files, millions of events)
 - Server-side pagination for fast navigation of large datasets
+- Full-text search across all key event fields with keyword highlighting
 - Filter panel with AND/OR logic, date range, and multi-field filters
 - Timeline histogram with click-to-filter and drag-to-select range
 - Resizable event detail panel with editable tags, colors, and notes
+- Bookmark events with star toggle (filter to show bookmarked only)
 - Color-coded rows for marking events of interest
 - Saved queries (stored in the database file)
 - Column visibility toggle (show/hide any of the 24+ columns)
 - Export filtered results to CSV
 - 11 UI themes (Forensic Dark, Classic Dark, High Contrast, Light, Solarized, Monokai, Dracula, Nord, Gruvbox, Matrix, Forensic Blue)
+- Built-in user guide (no internet required)
 - Native desktop menus with keyboard shortcuts
 - Multi-platform builds via GitHub Actions (Linux, Windows, macOS)
+
+## Screenshots
+
+![Welcome Screen](screenshots/welcome.png)
+
+![Main View](screenshots/main-view.png)
+
+![Filters](screenshots/filters.png)
+
+![Event Detail](screenshots/event-detail.png)
+
+![Theme Picker](screenshots/theme-picker.png)
 
 ## Tech Stack
 
@@ -58,7 +73,7 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 ## Usage
 
 1. Launch the application
-2. Click **Import** to import an L2T CSV or Plaso JSONL file, or **Open** to load an existing database
+2. Click **Import** to import a timeline file (L2T CSV, JSONL, TLN, L2TTLN, or dynamic CSV), or **Open** to load an existing database
 3. Use the **Filters** panel to narrow results by source, host, type, user, or date range
 4. Click **Timeline** to visualize event distribution over time
 5. Click any row to view full event details and add tags/notes/colors
@@ -73,4 +88,4 @@ Special thanks to David Nides for creating the original 4n6time application, whi
 
 ## License
 
-TBD
+MIT License. See [LICENSE](LICENSE) for details.

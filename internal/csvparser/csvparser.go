@@ -24,7 +24,7 @@ var exportHeader = []string{
 	"datetime", "timezone", "MACB", "source", "sourcetype", "type",
 	"user", "host", "desc", "filename", "inode", "notes", "format",
 	"extra", "reportnotes", "inreport", "tag", "color",
-	"offset", "store_number", "store_index", "vss_store_number",
+	"offset", "store_number", "store_index", "vss_store_number", "bookmark",
 }
 
 // ReadResult contains the outcome of a CSV import operation.
@@ -163,6 +163,7 @@ func WriteEvents(path string, events []*model.Event) error {
 			fmt.Sprintf("%d", e.StoreNumber),
 			fmt.Sprintf("%d", e.StoreIndex),
 			fmt.Sprintf("%d", e.VSSStoreNumber),
+			fmt.Sprintf("%d", e.Bookmark),
 		}
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("writing row: %w", err)

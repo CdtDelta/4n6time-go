@@ -29,4 +29,6 @@ export function QueryEvents(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 
 export function SaveQuery(arg1:string,arg2:string):Promise<void>;
 
+export function ToggleBookmark(arg1:number):Promise<number>;
+
 export function UpdateEventFields(arg1:number,arg2:Record<string, any>):Promise<void>;

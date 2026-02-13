@@ -36,7 +36,39 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
 
-	return &DB{path: path, conn: conn}, nil
+	db := &DB{path: path, conn: conn}
+
+	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
+	db.migrate()
+
+	return db, nil
+}
+
+// migrate applies schema migrations for backward compatibility.
+func (db *DB) migrate() {
+	// Add bookmark column if missing
+	var count int
+	err := db.conn.QueryRow(
+		"SELECT COUNT(*) FROM pragma_table_info('log2timeline') WHERE name='bookmark'",
+	).Scan(&count)
+	if err == nil && count == 0 {
+		db.conn.Exec("ALTER TABLE log2timeline ADD COLUMN bookmark INT DEFAULT 0")
+	}
+}
+
+// ToggleBookmark toggles the bookmark flag on an event and returns the new value.
+func (db *DB) ToggleBookmark(rowid int64) (int64, error) {
+	_, err := db.conn.Exec(
+		"UPDATE log2timeline SET bookmark = CASE WHEN bookmark = 1 THEN 0 ELSE 1 END WHERE rowid = ?",
+		rowid,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	var val int64
+	err = db.conn.QueryRow("SELECT bookmark FROM log2timeline WHERE rowid = ?", rowid).Scan(&val)
+	return val, err
 }
 
 // Create creates a new 4n6time SQLite database with the full schema.
@@ -96,7 +128,8 @@ func (db *DB) createSchema(indexFields []string) error {
 		tag TEXT, color TEXT, offset INT, store_number INT,
 		store_index INT, vss_store_number INT, URL TEXT,
 		record_number TEXT, event_identifier TEXT, event_type TEXT,
-		source_name TEXT, user_sid TEXT, computer_name TEXT
+		source_name TEXT, user_sid TEXT, computer_name TEXT,
+		bookmark INT DEFAULT 0
 	)`)
 	if err != nil {
 		return fmt.Errorf("creating log2timeline table: %w", err)
@@ -162,6 +195,7 @@ func (db *DB) InsertEvent(e *model.Event) error {
 		e.InReport, e.Tag, e.Color, e.Offset, e.StoreNumber,
 		e.StoreIndex, e.VSSStoreNumber, e.URL, e.RecordNumber,
 		e.EventID, e.EventType, e.SourceName, e.UserSID, e.ComputerName,
+		e.Bookmark,
 	)
 	return err
 }
@@ -191,6 +225,7 @@ func (db *DB) InsertEvents(events []*model.Event, onProgress func(count int)) (i
 			e.InReport, e.Tag, e.Color, e.Offset, e.StoreNumber,
 			e.StoreIndex, e.VSSStoreNumber, e.URL, e.RecordNumber,
 			e.EventID, e.EventType, e.SourceName, e.UserSID, e.ComputerName,
+			e.Bookmark,
 		)
 		if err != nil {
 			return inserted, fmt.Errorf("inserting event %d: %w", inserted+1, err)
@@ -216,7 +251,7 @@ func (db *DB) QueryEvents(whereClause string, args []interface{}, orderBy string
 		"desc, filename, inode, notes, format, extra, datetime, reportnotes, " +
 		"inreport, tag, color, offset, store_number, store_index, vss_store_number, " +
 		"URL, record_number, event_identifier, event_type, source_name, user_sid, " +
-		"computer_name FROM log2timeline"
+		"computer_name, bookmark FROM log2timeline"
 
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -502,7 +537,7 @@ func scanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			&e.ReportNotes, &e.InReport, &e.Tag, &e.Color, &e.Offset,
 			&e.StoreNumber, &e.StoreIndex, &e.VSSStoreNumber, &e.URL,
 			&e.RecordNumber, &e.EventID, &e.EventType, &e.SourceName,
-			&e.UserSID, &e.ComputerName,
+			&e.UserSID, &e.ComputerName, &e.Bookmark,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning event row: %w", err)
@@ -523,10 +558,10 @@ func isValidField(name string) bool {
 	return false
 }
 
-// The parameterized INSERT statement for events. 29 columns, 29 placeholders.
+// The parameterized INSERT statement for events. 30 columns, 30 placeholders.
 const insertEventSQL = `INSERT INTO log2timeline (
 	timezone, MACB, source, sourcetype, type, user, host, desc, filename,
 	inode, notes, format, extra, datetime, reportnotes, inreport, tag, color,
 	offset, store_number, store_index, vss_store_number, URL, record_number,
-	event_identifier, event_type, source_name, user_sid, computer_name
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

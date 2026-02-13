@@ -54,6 +54,10 @@ export function SaveQuery(arg1, arg2) {
   return window['go']['main']['App']['SaveQuery'](arg1, arg2);
 }
 
+export function ToggleBookmark(arg1) {
+  return window['go']['main']['App']['ToggleBookmark'](arg1);
+}
+
 export function UpdateEventFields(arg1, arg2) {
   return window['go']['main']['App']['UpdateEventFields'](arg1, arg2);
 }

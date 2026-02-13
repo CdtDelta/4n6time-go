@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion } from '../wailsjs/go/main/App'
+import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import FilterPanel from './components/FilterPanel'
 import EventDetail from './components/EventDetail'
@@ -13,12 +13,17 @@ import TimelineChart from './components/TimelineChart'
 import ThemePicker from './components/ThemePicker'
 import AboutDialog from './components/AboutDialog'
 import HelpDialog from './components/HelpDialog'
+import HighlightText from './components/HighlightText'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
 
 // Column definitions for the forensic timeline grid
 const defaultColDefs = [
+  { field: 'bookmark', headerName: '\u2606', width: 45, pinned: 'left',
+    sortable: true, filter: false, resizable: false,
+    cellStyle: { textAlign: 'center', cursor: 'pointer', fontSize: '16px', padding: 0 },
+  },
   { field: 'id', headerName: 'ID', width: 70, hide: true },
   { field: 'datetime', headerName: 'Date/Time', width: 170, sort: 'asc' },
   { field: 'timezone', headerName: 'TZ', width: 60 },
@@ -62,6 +67,7 @@ function App() {
   const [activeSearch, setActiveSearch] = useState('')
   const [showAbout, setShowAbout] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [bookmarkOnly, setBookmarkOnly] = useState(false)
   const [currentTheme, setCurrentTheme] = useState(() => {
     try { return window.localStorage?.getItem('4n6time-theme') || 'forensic-dark' }
     catch { return 'forensic-dark' }
@@ -103,11 +109,39 @@ function App() {
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
 
+  // Cell renderer that highlights search matches (skips bookmark column)
+  const HighlightCellRenderer = useCallback((params) => {
+    if (params.colDef.field === 'bookmark') {
+      return params.data?.bookmark ? '\u2605' : '\u2606'
+    }
+    const search = params.context?.activeSearch
+    if (!search || !params.value) return params.value ?? ''
+    return <HighlightText text={String(params.value)} search={search} />
+  }, [])
+
   const defaultColDef = useMemo(() => ({
     sortable: true,
     resizable: true,
     filter: true,
-  }), [])
+    cellRenderer: HighlightCellRenderer,
+  }), [HighlightCellRenderer])
+
+  // Handle bookmark toggle
+  const handleBookmarkToggle = useCallback(async (rowid) => {
+    try {
+      const newVal = await ToggleBookmark(rowid)
+      // Update the event in local state
+      setEvents(prev => prev.map(e =>
+        e.id === rowid ? { ...e, bookmark: newVal } : e
+      ))
+      // Update selectedEvent if it's the one being toggled
+      setSelectedEvent(prev =>
+        prev && prev.id === rowid ? { ...prev, bookmark: newVal } : prev
+      )
+    } catch (err) {
+      console.error('Error toggling bookmark:', err)
+    }
+  }, [])
 
   // Build the query request from current filters
   const buildQueryRequest = useCallback((page, filterState) => {
@@ -118,6 +152,7 @@ function App() {
       page: page,
       pageSize: PAGE_SIZE,
       searchText: activeSearch,
+      bookmarkOnly: bookmarkOnly,
     }
 
     const fs = filterState || activeFilters
@@ -135,7 +170,7 @@ function App() {
     }
 
     return req
-  }, [activeFilters, activeSearch])
+  }, [activeFilters, activeSearch, bookmarkOnly])
 
   const loadPage = useCallback(async (page, info, filterState) => {
     const db = info || dbInfo
@@ -155,7 +190,8 @@ function App() {
         const filterCount = (filterState || activeFilters)?.filters?.length || 0
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
         const searchLabel = activeSearch ? ` | Search: "${activeSearch}"` : ''
-        setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}`)
+        const bookmarkLabel = bookmarkOnly ? ' | \u2605 Bookmarked only' : ''
+        setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}${bookmarkLabel}`)
       }
     } catch (err) {
       setStatus('Error: ' + err)
@@ -261,7 +297,18 @@ function App() {
     if (dbInfo) {
       loadPage(1)
     }
+    // Refresh cells to update highlighting
+    if (gridRef.current?.api) {
+      gridRef.current.api.refreshCells({ force: true })
+    }
   }, [activeSearch]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload when bookmarkOnly filter changes
+  useEffect(() => {
+    if (dbInfo) {
+      loadPage(1)
+    }
+  }, [bookmarkOnly]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleFilters = useCallback(() => {
     setShowFilters(prev => !prev)
@@ -546,6 +593,13 @@ function App() {
           )}
           <button className="search-btn" onClick={handleSearch}>Search</button>
         </div>
+        <button
+          className={`bookmark-filter-btn ${bookmarkOnly ? 'active' : ''}`}
+          onClick={() => setBookmarkOnly(prev => !prev)}
+          title={bookmarkOnly ? 'Show all events' : 'Show bookmarked only'}
+        >
+          {bookmarkOnly ? '\u2605' : '\u2606'}
+        </button>
         <div className="toolbar-separator" />
         <button onClick={handleExportCSV}>Export CSV</button>
         <span className="db-info">
@@ -601,6 +655,7 @@ function App() {
             filters={activeFilters}
             dbInfo={dbInfo}
             onSelectRange={handleTimelineSelectRange}
+            theme={currentTheme}
           />
 
           <div className={`grid-container ${lightThemes.has(currentTheme) ? 'ag-theme-alpine' : 'ag-theme-alpine-dark'}`}>
@@ -609,12 +664,18 @@ function App() {
               rowData={events}
               columnDefs={columnDefs}
               defaultColDef={defaultColDef}
+              context={{ activeSearch }}
               animateRows={false}
               rowSelection="single"
               suppressCellFocus={false}
               getRowId={(params) => String(params.data.id)}
               getRowStyle={getRowStyle}
               onSelectionChanged={handleRowSelected}
+              onCellClicked={(params) => {
+                if (params.colDef.field === 'bookmark') {
+                  handleBookmarkToggle(params.data.id)
+                }
+              }}
               overlayLoadingTemplate='<span>Loading events...</span>'
               overlayNoRowsTemplate='<span>No events to display</span>'
               loading={loading}
@@ -630,6 +691,8 @@ function App() {
             onUpdate={handleEventUpdate}
             onClose={handleCloseDetail}
             height={detailHeight}
+            searchText={activeSearch}
+            onToggleBookmark={handleBookmarkToggle}
           />
 
           <div className="pagination">

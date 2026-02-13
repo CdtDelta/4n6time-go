@@ -32,6 +32,8 @@ const themes = {
       '--ag-row-hover': '#0f3460',
       '--ag-selected-row': '#533483',
       '--ag-border': '#0f3460',
+      '--highlight-bg': '#7b5ea7',
+      '--highlight-text': '#ffffff',
     }
   },
 
@@ -65,6 +67,8 @@ const themes = {
       '--ag-row-hover': '#2a2d2e',
       '--ag-selected-row': '#264f78',
       '--ag-border': '#3c3c3c',
+      '--highlight-bg': '#569cd6',
+      '--highlight-text': '#ffffff',
     }
   },
 
@@ -98,6 +102,8 @@ const themes = {
       '--ag-row-hover': '#1a1a1a',
       '--ag-selected-row': '#003366',
       '--ag-border': '#666666',
+      '--highlight-bg': '#ffff00',
+      '--highlight-text': '#000000',
     }
   },
 
@@ -132,6 +138,8 @@ const themes = {
       '--ag-row-hover': '#e3f2fd',
       '--ag-selected-row': '#bbdefb',
       '--ag-border': '#cccccc',
+      '--highlight-bg': '#fff176',
+      '--highlight-text': '#000000',
     }
   },
 
@@ -165,6 +173,8 @@ const themes = {
       '--ag-row-hover': '#073642',
       '--ag-selected-row': '#0d4a5e',
       '--ag-border': '#073642',
+      '--highlight-bg': '#b58900',
+      '--highlight-text': '#fdf6e3',
     }
   },
 
@@ -198,6 +208,8 @@ const themes = {
       '--ag-row-hover': '#3e3d32',
       '--ag-selected-row': '#49483e',
       '--ag-border': '#3e3d32',
+      '--highlight-bg': '#e6db74',
+      '--highlight-text': '#272822',
     }
   },
 
@@ -231,6 +243,8 @@ const themes = {
       '--ag-row-hover': '#44475a',
       '--ag-selected-row': '#3d3f5c',
       '--ag-border': '#44475a',
+      '--highlight-bg': '#f1fa8c',
+      '--highlight-text': '#282a36',
     }
   },
 
@@ -264,6 +278,8 @@ const themes = {
       '--ag-row-hover': '#434c5e',
       '--ag-selected-row': '#3d5277',
       '--ag-border': '#434c5e',
+      '--highlight-bg': '#ebcb8b',
+      '--highlight-text': '#2e3440',
     }
   },
 
@@ -297,6 +313,8 @@ const themes = {
       '--ag-row-hover': '#504945',
       '--ag-selected-row': '#4a3a10',
       '--ag-border': '#504945',
+      '--highlight-bg': '#fabd2f',
+      '--highlight-text': '#282828',
     }
   },
 
@@ -330,6 +348,8 @@ const themes = {
       '--ag-row-hover': '#001a00',
       '--ag-selected-row': '#003300',
       '--ag-border': '#003300',
+      '--highlight-bg': '#00ff00',
+      '--highlight-text': '#000000',
     }
   },
 
@@ -363,6 +383,8 @@ const themes = {
       '--ag-row-hover': '#263d55',
       '--ag-selected-row': '#1a4a72',
       '--ag-border': '#263d55',
+      '--highlight-bg': '#5bc0de',
+      '--highlight-text': '#1b2838',
     }
   },
 }

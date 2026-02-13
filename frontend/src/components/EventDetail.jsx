@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { UpdateEventFields } from '../../wailsjs/go/main/App'
+import HighlightText from './HighlightText'
 
 // Field groups for organized display
 const fieldGroups = [
@@ -66,7 +67,7 @@ const colorDisplayMap = {
   'BLACK': '#2c3e50',
 }
 
-function EventDetail({ event, onUpdate, onClose, height }) {
+function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBookmark }) {
   const [tag, setTag] = useState('')
   const [color, setColor] = useState('')
   const [notes, setNotes] = useState('')
@@ -118,6 +119,13 @@ function EventDetail({ event, onUpdate, onClose, height }) {
     <div className="detail-panel" onKeyDown={handleKeyDown} style={{ height: height || 280 }}>
       <div className="detail-header">
         <span className="detail-title">Event Detail</span>
+        <button
+          className={`detail-bookmark ${event.bookmark ? 'active' : ''}`}
+          onClick={() => onToggleBookmark && onToggleBookmark(event.id)}
+          title={event.bookmark ? 'Remove bookmark' : 'Bookmark this event'}
+        >
+          {event.bookmark ? '\u2605' : '\u2606'}
+        </button>
         <span className="detail-id">ID: {event.id}</span>
         <button className="detail-close" onClick={onClose}>x</button>
       </div>
@@ -126,14 +134,18 @@ function EventDetail({ event, onUpdate, onClose, height }) {
         {/* Description (full width) */}
         <div className="detail-desc-section">
           <label>Description</label>
-          <div className="detail-desc-text">{event.desc || '(empty)'}</div>
+          <div className="detail-desc-text">
+            {event.desc ? <HighlightText text={event.desc} search={searchText} /> : '(empty)'}
+          </div>
         </div>
 
         {/* Extra info (full width) */}
         {event.extra && (
           <div className="detail-desc-section">
             <label>Extra</label>
-            <div className="detail-desc-text">{event.extra}</div>
+            <div className="detail-desc-text">
+              <HighlightText text={event.extra} search={searchText} />
+            </div>
           </div>
         )}
 
@@ -148,7 +160,9 @@ function EventDetail({ event, onUpdate, onClose, height }) {
                 return (
                   <div key={f.key} className="detail-field">
                     <span className="detail-field-label">{f.label}</span>
-                    <span className="detail-field-value">{String(val)}</span>
+                    <span className="detail-field-value">
+                      <HighlightText text={String(val)} search={searchText} />
+                    </span>
                   </div>
                 )
               })}

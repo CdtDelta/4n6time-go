@@ -8,7 +8,7 @@ var Fields = []string{
 	"notes", "format", "extra", "reportnotes", "inreport",
 	"tag", "color", "offset", "store_number", "store_index",
 	"vss_store_number", "URL", "record_number", "event_identifier",
-	"event_type", "source_name", "user_sid", "computer_name",
+	"event_type", "source_name", "user_sid", "computer_name", "bookmark",
 }
 
 // Event represents a single timeline event from a Plaso/log2timeline output.
@@ -44,4 +44,5 @@ type Event struct {
 	SourceName     string `json:"source_name" db:"source_name"`
 	UserSID        string `json:"user_sid" db:"user_sid"`
 	ComputerName   string `json:"computer_name" db:"computer_name"`
+	Bookmark       int64  `json:"bookmark" db:"bookmark"`
 }

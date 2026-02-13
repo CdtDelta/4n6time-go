@@ -60,6 +60,7 @@ export namespace main {
 	    page: number;
 	    pageSize: number;
 	    searchText: string;
+	    bookmarkOnly: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryRequest(source);
@@ -73,6 +74,7 @@ export namespace main {
 	        this.page = source["page"];
 	        this.pageSize = source["pageSize"];
 	        this.searchText = source["searchText"];
+	        this.bookmarkOnly = source["bookmarkOnly"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -179,6 +181,7 @@ export namespace model {
 	    source_name: string;
 	    user_sid: string;
 	    computer_name: string;
+	    bookmark: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Event(source);
@@ -216,6 +219,7 @@ export namespace model {
 	        this.source_name = source["source_name"];
 	        this.user_sid = source["user_sid"];
 	        this.computer_name = source["computer_name"];
+	        this.bookmark = source["bookmark"];
 	    }
 	}
 

@@ -8,9 +8,11 @@ import (
 
 	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
+	"github.com/cdtdelta/4n6time/internal/dynamicparser"
 	"github.com/cdtdelta/4n6time/internal/jsonlparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/query"
+	"github.com/cdtdelta/4n6time/internal/tlnparser"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -73,9 +75,10 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 	csvPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Import Timeline File",
 		Filters: []runtime.FileFilter{
-			{DisplayName: "Timeline Files (*.csv, *.jsonl)", Pattern: "*.csv;*.jsonl"},
+			{DisplayName: "Timeline Files (*.csv, *.jsonl, *.tln, *.l2ttln, *.txt)", Pattern: "*.csv;*.jsonl;*.tln;*.l2ttln;*.txt"},
 			{DisplayName: "CSV Files (*.csv)", Pattern: "*.csv"},
 			{DisplayName: "JSONL Files (*.jsonl)", Pattern: "*.jsonl"},
+			{DisplayName: "TLN Files (*.tln, *.l2ttln, *.txt)", Pattern: "*.tln;*.l2ttln;*.txt"},
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
 	})
@@ -89,14 +92,30 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 	ext := strings.ToLower(filepath.Ext(csvPath))
 	isJSONL := ext == ".jsonl" || ext == ".json"
 
-	// Validate the file before doing anything
+	// Detect format: JSONL, TLN/L2TTLN, dynamic CSV, or L2T CSV
+	// Try validation in order of specificity
+	formatName := ""
 	if isJSONL {
 		if err := jsonlparser.ValidateFile(csvPath); err != nil {
 			return nil, fmt.Errorf("invalid JSONL file: %w", err)
 		}
+		formatName = "JSONL"
+	} else if ext == ".tln" || ext == ".l2ttln" {
+		if err := tlnparser.ValidateFile(csvPath); err != nil {
+			return nil, fmt.Errorf("invalid TLN file: %w", err)
+		}
+		formatName = "TLN"
 	} else {
-		if err := csvparser.ValidateHeader(csvPath); err != nil {
-			return nil, fmt.Errorf("invalid CSV file: %w", err)
+		// Try L2T CSV first (fixed 17-column format)
+		if err := csvparser.ValidateHeader(csvPath); err == nil {
+			formatName = "CSV"
+		} else if tlnErr := tlnparser.ValidateFile(csvPath); tlnErr == nil {
+			// Could be TLN with .txt or .csv extension
+			formatName = "TLN"
+		} else if dynErr := dynamicparser.ValidateFile(csvPath); dynErr == nil {
+			formatName = "Dynamic CSV"
+		} else {
+			return nil, fmt.Errorf("unrecognized file format: not a valid L2T CSV, JSONL, TLN, or dynamic CSV file")
 		}
 	}
 
@@ -129,39 +148,53 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 
 	// Read the file
 	var events []*model.Event
-	formatName := "CSV"
-	if isJSONL {
-		formatName = "JSONL"
+
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
+	})
+
+	progressCallback := func(count int) {
+		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+		})
 	}
 
-	if isJSONL {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
-		})
-		result, err := jsonlparser.ReadEvents(csvPath, func(count int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
-			})
-		})
+	switch formatName {
+	case "JSONL":
+		result, err := jsonlparser.ReadEvents(csvPath, progressCallback)
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("reading JSONL: %w", err)
 		}
 		events = result.Events
-	} else {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
-		})
-		result, err := csvparser.ReadEvents(csvPath, "", "", 0, func(count int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
-			})
-		})
+
+	case "TLN":
+		result, err := tlnparser.ReadEvents(csvPath, progressCallback)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("reading TLN: %w", err)
+		}
+		events = result.Events
+
+	case "Dynamic CSV":
+		result, err := dynamicparser.ReadEvents(csvPath, progressCallback)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("reading dynamic CSV: %w", err)
+		}
+		events = result.Events
+
+	case "CSV":
+		result, err := csvparser.ReadEvents(csvPath, "", "", 0, progressCallback)
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("reading CSV: %w", err)
 		}
 		events = result.Events
+
+	default:
+		db.Close()
+		return nil, fmt.Errorf("unknown format: %s", formatName)
 	}
 
 	// Insert into database
@@ -200,12 +233,13 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
-	Filters    []FilterItem `json:"filters"`
-	Logic      string       `json:"logic"`
-	OrderBy    string       `json:"orderBy"`
-	Page       int          `json:"page"`
-	PageSize   int          `json:"pageSize"`
-	SearchText string       `json:"searchText"`
+	Filters      []FilterItem `json:"filters"`
+	Logic        string       `json:"logic"`
+	OrderBy      string       `json:"orderBy"`
+	Page         int          `json:"page"`
+	PageSize     int          `json:"pageSize"`
+	SearchText   string       `json:"searchText"`
+	BookmarkOnly bool         `json:"bookmarkOnly"`
 }
 
 type FilterItem struct {
@@ -283,6 +317,12 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		}
 	}
 
+	// Bookmark filter
+	if req.BookmarkOnly {
+		p := query.Simple("bookmark", query.Equal, "1")
+		q.AddPredicate(p)
+	}
+
 	// Order by
 	if req.OrderBy != "" {
 		q.OrderBy(req.OrderBy)
@@ -323,6 +363,7 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 			&e.InReport, &e.Tag, &e.Color, &e.Offset, &e.StoreNumber,
 			&e.StoreIndex, &e.VSSStoreNumber, &e.URL, &e.RecordNumber,
 			&e.EventID, &e.EventType, &e.SourceName, &e.UserSID, &e.ComputerName,
+			&e.Bookmark,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning row: %w", err)
@@ -414,6 +455,7 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 			&e.InReport, &e.Tag, &e.Color, &e.Offset, &e.StoreNumber,
 			&e.StoreIndex, &e.VSSStoreNumber, &e.URL, &e.RecordNumber,
 			&e.EventID, &e.EventType, &e.SourceName, &e.UserSID, &e.ComputerName,
+			&e.Bookmark,
 		)
 		if err != nil {
 			return "", fmt.Errorf("scanning row: %w", err)
@@ -495,6 +537,11 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 			whereArgs = append(whereArgs, "%"+req.SearchText+"%")
 		}
 		whereParts = append(whereParts, "("+strings.Join(orParts, " OR ")+")")
+	}
+
+	// Bookmark filter for histogram
+	if req.BookmarkOnly {
+		whereParts = append(whereParts, "bookmark = 1")
 	}
 
 	logic := "AND"
@@ -589,6 +636,14 @@ func (a *App) UpdateEventFields(rowid int64, fields map[string]interface{}) erro
 		return fmt.Errorf("no database open")
 	}
 	return a.db.UpdateEvent(rowid, fields)
+}
+
+// ToggleBookmark toggles the bookmark flag on an event and returns the new value.
+func (a *App) ToggleBookmark(rowid int64) (int64, error) {
+	if a.db == nil {
+		return 0, fmt.Errorf("no database open")
+	}
+	return a.db.ToggleBookmark(rowid)
 }
 
 // -- Saved Queries --

@@ -4,8 +4,9 @@ import {
   Brush, CartesianGrid, ReferenceArea,
 } from 'recharts'
 import { GetTimelineHistogram } from '../../wailsjs/go/main/App'
+import themes from '../themes'
 
-function TimelineChart({ visible, filters, dbInfo, onSelectRange }) {
+function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
   const [refAreaLeft, setRefAreaLeft] = useState(null)
@@ -158,11 +159,11 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange }) {
 
   if (!visible) return null
 
-  // Read theme colors from CSS variables for recharts
-  const style = getComputedStyle(document.documentElement)
-  const barFill = style.getPropertyValue('--color-bar-fill').trim() || '#533483'
-  const borderColor = style.getPropertyValue('--border-primary').trim() || '#0f3460'
-  const mutedColor = style.getPropertyValue('--text-muted').trim() || '#808080'
+  // Read theme colors directly from theme definitions
+  const themeVars = themes[theme]?.vars || {}
+  const barFill = themeVars['--color-bar-fill'] || '#533483'
+  const borderColor = themeVars['--border-primary'] || '#0f3460'
+  const mutedColor = themeVars['--text-muted'] || '#808080'
 
   return (
     <div className="timeline-chart">
