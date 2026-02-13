@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="4n6time-go.png" alt="4n6time-go">
+</p>
+
 # 4n6time-go
 
 Forensic timeline analysis tool, rewritten from Python to Go. Desktop application for analyzing large-scale forensic datasets, particularly timeline data from log2timeline (L2T) format files.
