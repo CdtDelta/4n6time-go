@@ -14,8 +14,33 @@
 .DS_Store
 Thumbs.db
 
-# Go
-vendor/
-
 # Test databases
 testdata/*.db
+
+# Build output
+build/bin/
+build/appicon.png
+
+# Frontend build output
+frontend/dist/
+frontend/node_modules/
+
+# Wails generated bindings (regenerated on build)
+frontend/wailsjs/go/main/App.d.ts
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Docker
+.docker/
+
+# Claude
+CLAUDE.md
+.claude/
