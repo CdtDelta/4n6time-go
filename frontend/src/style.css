@@ -253,9 +253,29 @@ html, body, #root {
   font-size: 11px;
 }
 
-.pagination button:hover { background: var(--bg-accent-hover); }
+.pagination button:hover:not(:disabled) { background: var(--bg-accent-hover); }
 .pagination button:disabled { opacity: 0.4; cursor: default; }
-.pagination .page-info { color: var(--text-secondary); }
+.pagination .page-info { color: var(--text-secondary); white-space: nowrap; }
+.pagination .page-total { margin-left: 4px; }
+
+.pagination .page-input {
+  width: 48px;
+  padding: 3px 4px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+  text-align: center;
+  color-scheme: var(--color-scheme, dark);
+}
+
+.pagination .page-input:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.pagination .page-input:disabled { opacity: 0.4; }
 
 /* AG Grid theme overrides */
 .ag-theme-alpine-dark {
@@ -1206,6 +1226,237 @@ html, body, #root {
 
 .about-links p {
   margin: 2px 0;
+}
+
+/* Logging dialog */
+.logging-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 8px;
+  width: 400px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.logging-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+}
+
+.logging-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--text-primary);
+}
+
+.logging-content {
+  padding: 8px 20px 20px;
+}
+
+.logging-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.logging-label {
+  color: var(--text-muted);
+  min-width: 60px;
+}
+
+.logging-badge {
+  padding: 2px 10px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.logging-badge.enabled {
+  background: rgba(46, 204, 113, 0.15);
+  color: var(--color-success, #2ecc71);
+}
+
+.logging-badge.disabled {
+  background: rgba(149, 165, 166, 0.15);
+  color: var(--text-muted);
+}
+
+.logging-path {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.logging-persist-row {
+  margin: 14px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.logging-persist-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.logging-persist-row input[type="checkbox"] {
+  accent-color: var(--bg-accent-active);
+}
+
+.logging-error {
+  color: #e74c3c;
+  font-size: 12px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: rgba(231, 76, 60, 0.1);
+  border-radius: 4px;
+}
+
+.logging-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.logging-actions button {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-accent);
+  color: var(--text-primary);
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.logging-actions button:hover:not(:disabled) {
+  background: var(--bg-accent-hover);
+}
+
+.logging-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.logging-actions .logging-close-btn {
+  background: transparent;
+  border-color: var(--border-primary);
+  color: var(--text-secondary);
+}
+
+.logging-actions .logging-close-btn:hover:not(:disabled) {
+  background: var(--bg-accent);
+  color: var(--text-primary);
+}
+
+/* PostgreSQL connection dialog */
+.pg-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 8px;
+  width: 380px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.pg-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+}
+
+.pg-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--text-primary);
+}
+
+.pg-content {
+  padding: 8px 20px 20px;
+}
+
+.pg-field {
+  margin-bottom: 10px;
+}
+
+.pg-field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.pg-field input,
+.pg-field select {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.pg-field input:focus,
+.pg-field select:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.pg-error {
+  color: #e74c3c;
+  font-size: 12px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: rgba(231, 76, 60, 0.1);
+  border-radius: 4px;
+}
+
+.pg-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.pg-actions button {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-accent);
+  color: var(--text-primary);
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.pg-actions button:hover:not(:disabled) {
+  background: var(--bg-accent-hover);
+}
+
+.pg-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pg-actions .pg-cancel {
+  background: transparent;
+  border-color: var(--border-primary);
+  color: var(--text-secondary);
+}
+
+.pg-actions .pg-cancel:hover:not(:disabled) {
+  background: var(--bg-accent);
+  color: var(--text-primary);
 }
 
 /* Help dialog */

@@ -5,11 +5,21 @@ import {database} from '../models';
 
 export function CloseDatabase():Promise<void>;
 
+export function ConnectPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.DBInfo>;
+
+export function CreatePostgresDatabase(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.DBInfo>;
+
 export function DeleteSavedQuery(arg1:string):Promise<void>;
+
+export function DisableLogging():Promise<void>;
+
+export function EnableLogging():Promise<string>;
 
 export function ExportCSV(arg1:main.QueryRequest):Promise<string>;
 
 export function GetDistinctValues(arg1:string):Promise<Record<string, number>>;
+
+export function GetLoggingStatus():Promise<main.LoggingStatus>;
 
 export function GetMinMaxDate():Promise<Array<string>>;
 
@@ -25,9 +35,13 @@ export function ImportCSV():Promise<main.DBInfo>;
 
 export function OpenDatabase():Promise<main.DBInfo>;
 
+export function PushToPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
+
 export function QueryEvents(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 
 export function SaveQuery(arg1:string,arg2:string):Promise<void>;
+
+export function SetLoggingPersist(arg1:boolean):Promise<void>;
 
 export function ToggleBookmark(arg1:number):Promise<number>;
 

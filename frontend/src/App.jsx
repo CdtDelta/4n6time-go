@@ -3,8 +3,9 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark } from '../wailsjs/go/main/App'
+import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
+import PostgresDialog from './components/PostgresDialog'
 import FilterPanel from './components/FilterPanel'
 import EventDetail from './components/EventDetail'
 import SavedQueries from './components/SavedQueries'
@@ -13,6 +14,7 @@ import TimelineChart from './components/TimelineChart'
 import ThemePicker from './components/ThemePicker'
 import AboutDialog from './components/AboutDialog'
 import HelpDialog from './components/HelpDialog'
+import LoggingDialog from './components/LoggingDialog'
 import HighlightText from './components/HighlightText'
 import themes, { lightThemes } from './themes'
 
@@ -67,6 +69,10 @@ function App() {
   const [activeSearch, setActiveSearch] = useState('')
   const [showAbout, setShowAbout] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [showLogging, setShowLogging] = useState(false)
+  const [showPostgres, setShowPostgres] = useState(false)
+  const [showPushPostgres, setShowPushPostgres] = useState(false)
+  const [pageInputValue, setPageInputValue] = useState('1')
   const [bookmarkOnly, setBookmarkOnly] = useState(false)
   const [currentTheme, setCurrentTheme] = useState(() => {
     try { return window.localStorage?.getItem('4n6time-theme') || 'forensic-dark' }
@@ -108,6 +114,11 @@ function App() {
   }, [])
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
+
+  // Keep page input in sync when currentPage changes via button navigation or loadPage
+  useEffect(() => {
+    setPageInputValue(String(currentPage))
+  }, [currentPage])
 
   // Cell renderer that highlights search matches (skips bookmark column)
   const HighlightCellRenderer = useCallback((params) => {
@@ -219,6 +230,32 @@ function App() {
     }
   }, [loadPage])
 
+  const handlePostgresConnect = useCallback(async (info) => {
+    setShowPostgres(false)
+    setDbInfo(info)
+    setActiveFilters(null)
+    setShowFilters(false)
+    setSelectedEvent(null)
+    setStatus(`Connected: ${info.path} (${info.eventCount.toLocaleString()} events)`)
+    await loadPage(1, info, null)
+  }, [loadPage])
+
+  const handlePushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
+    setShowPushPostgres(false)
+    setImporting(true)
+    setStatus('Pushing data to PostgreSQL...')
+    try {
+      const result = await PushToPostgres(host, port, dbName, user, password, sslMode)
+      if (result) {
+        setStatus(result)
+      }
+    } catch (err) {
+      setStatus('Push error: ' + err)
+    } finally {
+      setImporting(false)
+    }
+  }, [])
+
   const handleImportCSV = useCallback(async () => {
     try {
       setImporting(true)
@@ -264,6 +301,23 @@ function App() {
   const handleNextPage = useCallback(() => {
     if (currentPage < totalPages) loadPage(currentPage + 1)
   }, [currentPage, totalPages, loadPage])
+
+  const handleFirstPage = useCallback(() => {
+    if (currentPage > 1) loadPage(1)
+  }, [currentPage, loadPage])
+
+  const handleLastPage = useCallback(() => {
+    if (currentPage < totalPages) loadPage(totalPages)
+  }, [currentPage, totalPages, loadPage])
+
+  const handlePageInputSubmit = useCallback(() => {
+    const num = parseInt(pageInputValue, 10)
+    if (!isNaN(num) && num >= 1 && num <= totalPages && num !== currentPage) {
+      loadPage(num)
+    } else {
+      setPageInputValue(String(currentPage))
+    }
+  }, [pageInputValue, totalPages, currentPage, loadPage])
 
   const handleApplyFilters = useCallback((filterState) => {
     setActiveFilters(filterState)
@@ -478,6 +532,7 @@ function App() {
     const cancelSelectAll = EventsOn('menu:select-all', () => { document.execCommand('selectAll') })
     const cancelAbout = EventsOn('menu:about', () => { setShowAbout(true) })
     const cancelHelp = EventsOn('menu:help', () => { setShowHelp(true) })
+    const cancelLogging = EventsOn('menu:logging', () => { setShowLogging(true) })
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
@@ -490,6 +545,7 @@ function App() {
       if (typeof cancelSelectAll === 'function') cancelSelectAll()
       if (typeof cancelAbout === 'function') cancelAbout()
       if (typeof cancelHelp === 'function') cancelHelp()
+      if (typeof cancelLogging === 'function') cancelLogging()
     }
   }, [handleOpenDB, handleImportCSV, handleCloseDB, handleExportCSV])
 
@@ -535,12 +591,22 @@ function App() {
           visible={showHelp}
           onClose={() => setShowHelp(false)}
         />
+        <LoggingDialog
+          visible={showLogging}
+          onClose={() => setShowLogging(false)}
+        />
+        <PostgresDialog
+          visible={showPostgres}
+          onConnect={handlePostgresConnect}
+          onClose={() => setShowPostgres(false)}
+        />
         <div className="welcome">
           <h1>4n6time</h1>
           <p>Forensic Timeline Viewer</p>
           <div className="actions">
             <button onClick={handleOpenDB}>Open Database</button>
             <button onClick={handleImportCSV}>Import Timeline</button>
+            <button onClick={() => setShowPostgres(true)}>Connect to PostgreSQL</button>
           </div>
         </div>
         <div className="status-bar">
@@ -602,6 +668,9 @@ function App() {
         </button>
         <div className="toolbar-separator" />
         <button onClick={handleExportCSV}>Export CSV</button>
+        {dbInfo.driver === 'sqlite' && (
+          <button onClick={() => setShowPushPostgres(true)}>Push to PostgreSQL</button>
+        )}
         <span className="db-info">
           {dbInfo.path} | {dbInfo.eventCount.toLocaleString()} events
           {dbInfo.minDate && ` | ${dbInfo.minDate} to ${dbInfo.maxDate}`}
@@ -631,6 +700,18 @@ function App() {
       <HelpDialog
         visible={showHelp}
         onClose={() => setShowHelp(false)}
+      />
+
+      <LoggingDialog
+        visible={showLogging}
+        onClose={() => setShowLogging(false)}
+      />
+
+      <PostgresDialog
+        visible={showPushPostgres}
+        mode="push"
+        onPush={handlePushToPostgres}
+        onClose={() => setShowPushPostgres(false)}
       />
 
       <div className="main-content">
@@ -696,16 +777,30 @@ function App() {
           />
 
           <div className="pagination">
-            <button onClick={handlePrevPage} disabled={currentPage <= 1 || loading}>
-              Previous
+            <button onClick={handleFirstPage} disabled={currentPage <= 1 || loading}>
+              First
             </button>
-            <span className="page-info">
-              Page {currentPage} of {totalPages.toLocaleString()}
-              {' '}({totalCount.toLocaleString()} total events)
-            </span>
+            <button onClick={handlePrevPage} disabled={currentPage <= 1 || loading}>
+              Prev
+            </button>
+            <span className="page-info">Page</span>
+            <input
+              className="page-input"
+              type="text"
+              value={pageInputValue}
+              onChange={(e) => setPageInputValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handlePageInputSubmit() }}
+              onBlur={() => setPageInputValue(String(currentPage))}
+              disabled={loading}
+            />
+            <span className="page-info">of {totalPages.toLocaleString()}</span>
             <button onClick={handleNextPage} disabled={currentPage >= totalPages || loading}>
               Next
             </button>
+            <button onClick={handleLastPage} disabled={currentPage >= totalPages || loading}>
+              Last
+            </button>
+            <span className="page-info page-total">({totalCount.toLocaleString()} total events)</span>
           </div>
         </div>
       </div>

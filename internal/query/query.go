@@ -118,41 +118,52 @@ func Combine(preds []*Predicate, logic Logic) *Predicate {
 	return result
 }
 
-// WhereClause returns the SQL WHERE fragment and its parameter values.
+// WhereClause returns the SQL WHERE fragment and its parameter values
+// using the default dialect (SQLite).
 // For example: "(source = ?)", []interface{}{"FILE"}
 func (p *Predicate) WhereClause() (string, []interface{}) {
+	sql, args, _ := p.whereClauseWithDialect(DefaultDialect, 1)
+	return sql, args
+}
+
+// whereClauseWithDialect generates the WHERE fragment using the specified dialect.
+// startIdx is the 1-based parameter index for numbered placeholder styles.
+// Returns the SQL fragment, parameter values, and the next available parameter index.
+func (p *Predicate) whereClauseWithDialect(d QueryDialect, startIdx int) (string, []interface{}, int) {
 	if p == nil {
-		return "", nil
+		return "", nil, startIdx
 	}
 
 	switch p.kind {
 	case predNone:
-		return "", nil
+		return "", nil, startIdx
 
 	case predSimple:
+		placeholder := d.Placeholder(startIdx)
+		quotedField := d.QuoteColumn(p.field)
 		if p.op == Like || p.op == NotLike {
-			return fmt.Sprintf("(%s %s ?)", p.field, p.op),
-				[]interface{}{"%" + p.value + "%"}
+			return fmt.Sprintf("(%s %s %s)", quotedField, p.op, placeholder),
+				[]interface{}{"%" + p.value + "%"}, startIdx + 1
 		}
-		return fmt.Sprintf("(%s %s ?)", p.field, p.op),
-			[]interface{}{p.value}
+		return fmt.Sprintf("(%s %s %s)", quotedField, p.op, placeholder),
+			[]interface{}{p.value}, startIdx + 1
 
 	case predDate:
-		return "(datetime BETWEEN datetime(?) AND datetime(?))",
-			[]interface{}{p.date1, p.date2}
+		return d.DateBetweenSQL(startIdx, startIdx+1),
+			[]interface{}{p.date1, p.date2}, startIdx + 2
 
 	case predComposite:
-		leftSQL, leftArgs := p.left.WhereClause()
-		rightSQL, rightArgs := p.right.WhereClause()
+		leftSQL, leftArgs, nextIdx := p.left.whereClauseWithDialect(d, startIdx)
+		rightSQL, rightArgs, nextIdx2 := p.right.whereClauseWithDialect(d, nextIdx)
 
 		if leftSQL == "" && rightSQL == "" {
-			return "", nil
+			return "", nil, nextIdx2
 		}
 		if leftSQL == "" {
-			return rightSQL, rightArgs
+			return rightSQL, rightArgs, nextIdx2
 		}
 		if rightSQL == "" {
-			return leftSQL, leftArgs
+			return leftSQL, leftArgs, nextIdx
 		}
 
 		logicStr := "AND"
@@ -162,10 +173,10 @@ func (p *Predicate) WhereClause() (string, []interface{}) {
 
 		sql := fmt.Sprintf("(%s %s %s)", leftSQL, logicStr, rightSQL)
 		args := append(leftArgs, rightArgs...)
-		return sql, args
+		return sql, args, nextIdx2
 
 	default:
-		return "", nil
+		return "", nil, startIdx
 	}
 }
 
@@ -210,6 +221,7 @@ type Query struct {
 	orderBy    string
 	pageSize   int
 	page       int
+	dialect    QueryDialect
 }
 
 // New creates a new Query with the given page size.
@@ -219,7 +231,13 @@ func New(pageSize int) *Query {
 		logic:    AND,
 		pageSize: pageSize,
 		page:     1,
+		dialect:  DefaultDialect,
 	}
+}
+
+// SetDialect sets the SQL dialect used for query generation.
+func (q *Query) SetDialect(d QueryDialect) {
+	q.dialect = d
 }
 
 // SetLogic sets how top-level predicates are combined (AND or OR).
@@ -257,7 +275,7 @@ func (q *Query) OrderBy(field string) error {
 		q.orderBy = ""
 		return nil
 	}
-	if !isValidField(field) && field != "rowid" {
+	if !isValidField(field) && field != q.dialect.IDColumn() {
 		return fmt.Errorf("invalid order by field: %s", field)
 	}
 	q.orderBy = field
@@ -279,7 +297,12 @@ func (q *Query) PageNumber() int {
 // Build generates the full SQL SELECT statement and its parameter values.
 // Returns the SQL string and a slice of arguments for parameterized execution.
 func (q *Query) Build() (string, []interface{}) {
-	selectFields := "rowid, " + strings.Join(model.Fields, ", ")
+	idCol := q.dialect.IDColumn()
+	quotedFields := make([]string, len(model.Fields))
+	for i, f := range model.Fields {
+		quotedFields[i] = q.dialect.QuoteColumn(f)
+	}
+	selectFields := idCol + ", " + strings.Join(quotedFields, ", ")
 	sql := "SELECT " + selectFields + " FROM log2timeline"
 
 	var allArgs []interface{}
@@ -288,7 +311,7 @@ func (q *Query) Build() (string, []interface{}) {
 	if len(q.predicates) > 0 {
 		combined := Combine(q.predicates, q.logic)
 		if combined != nil {
-			whereSQL, whereArgs := combined.WhereClause()
+			whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
 			if whereSQL != "" {
 				sql += " WHERE " + whereSQL
 				allArgs = append(allArgs, whereArgs...)
@@ -298,7 +321,7 @@ func (q *Query) Build() (string, []interface{}) {
 
 	// ORDER BY
 	if q.orderBy != "" {
-		sql += " ORDER BY " + q.orderBy
+		sql += " ORDER BY " + q.dialect.QuoteColumn(q.orderBy)
 	}
 
 	// LIMIT / OFFSET for pagination
@@ -312,14 +335,15 @@ func (q *Query) Build() (string, []interface{}) {
 
 // BuildCount generates a COUNT query using the same predicates.
 func (q *Query) BuildCount() (string, []interface{}) {
-	sql := "SELECT COUNT(rowid) FROM log2timeline"
+	idCol := q.dialect.IDColumn()
+	sql := "SELECT COUNT(" + idCol + ") FROM log2timeline"
 
 	var allArgs []interface{}
 
 	if len(q.predicates) > 0 {
 		combined := Combine(q.predicates, q.logic)
 		if combined != nil {
-			whereSQL, whereArgs := combined.WhereClause()
+			whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
 			if whereSQL != "" {
 				sql += " WHERE " + whereSQL
 				allArgs = append(allArgs, whereArgs...)
@@ -369,7 +393,12 @@ func (rq *RawQuery) SetRawWhere(where string) {
 
 // Build generates the SQL using the raw WHERE clause plus ordering and pagination.
 func (rq *RawQuery) Build() (string, []interface{}) {
-	selectFields := "rowid, " + strings.Join(model.Fields, ", ")
+	idCol := rq.dialect.IDColumn()
+	quotedFields := make([]string, len(model.Fields))
+	for i, f := range model.Fields {
+		quotedFields[i] = rq.dialect.QuoteColumn(f)
+	}
+	selectFields := idCol + ", " + strings.Join(quotedFields, ", ")
 	sql := "SELECT " + selectFields + " FROM log2timeline"
 
 	if rq.rawWhere != "" {
@@ -377,7 +406,7 @@ func (rq *RawQuery) Build() (string, []interface{}) {
 	}
 
 	if rq.orderBy != "" {
-		sql += " ORDER BY " + rq.orderBy
+		sql += " ORDER BY " + rq.dialect.QuoteColumn(rq.orderBy)
 	}
 
 	if rq.pageSize > 0 {

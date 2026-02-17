@@ -17,15 +17,19 @@ var DefaultIndexFields = []string{"host", "user", "source", "sourcetype", "type"
 // These map to l2t_<name>s tables in the database (e.g. l2t_sources, l2t_sourcetypes).
 var metadataFields = []string{"sourcetype", "source", "user", "host", "MACB", "color", "type", "record_number"}
 
-// DB manages all SQLite operations for a 4n6time database.
-type DB struct {
-	path string
-	conn *sql.DB
+// SQLiteStore manages all SQLite operations for a 4n6time database.
+// It implements the Store interface.
+type SQLiteStore struct {
+	path    string
+	conn    *sql.DB
+	dialect Dialect
 }
 
-// Open opens an existing 4n6time SQLite database.
-func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path)
+// OpenSQLite opens an existing 4n6time SQLite database.
+func OpenSQLite(path string) (*SQLiteStore, error) {
+	d := &SQLiteDialect{}
+
+	conn, err := sql.Open(d.DriverName(), d.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
@@ -36,7 +40,7 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
 
-	db := &DB{path: path, conn: conn}
+	db := &SQLiteStore{path: path, conn: conn, dialect: d}
 
 	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
 	db.migrate()
@@ -45,11 +49,11 @@ func Open(path string) (*DB, error) {
 }
 
 // migrate applies schema migrations for backward compatibility.
-func (db *DB) migrate() {
+func (db *SQLiteStore) migrate() {
 	// Add bookmark column if missing
 	var count int
 	err := db.conn.QueryRow(
-		"SELECT COUNT(*) FROM pragma_table_info('log2timeline') WHERE name='bookmark'",
+		db.dialect.SchemaCheckColumnSQL("log2timeline", "bookmark"),
 	).Scan(&count)
 	if err == nil && count == 0 {
 		db.conn.Exec("ALTER TABLE log2timeline ADD COLUMN bookmark INT DEFAULT 0")
@@ -57,9 +61,10 @@ func (db *DB) migrate() {
 }
 
 // ToggleBookmark toggles the bookmark flag on an event and returns the new value.
-func (db *DB) ToggleBookmark(rowid int64) (int64, error) {
+func (db *SQLiteStore) ToggleBookmark(rowid int64) (int64, error) {
+	idCol := db.dialect.IDColumn()
 	_, err := db.conn.Exec(
-		"UPDATE log2timeline SET bookmark = CASE WHEN bookmark = 1 THEN 0 ELSE 1 END WHERE rowid = ?",
+		"UPDATE log2timeline SET bookmark = CASE WHEN bookmark = 1 THEN 0 ELSE 1 END WHERE "+idCol+" = "+db.dialect.Placeholder(1),
 		rowid,
 	)
 	if err != nil {
@@ -67,19 +72,24 @@ func (db *DB) ToggleBookmark(rowid int64) (int64, error) {
 	}
 
 	var val int64
-	err = db.conn.QueryRow("SELECT bookmark FROM log2timeline WHERE rowid = ?", rowid).Scan(&val)
+	err = db.conn.QueryRow(
+		"SELECT bookmark FROM log2timeline WHERE "+idCol+" = "+db.dialect.Placeholder(1),
+		rowid,
+	).Scan(&val)
 	return val, err
 }
 
-// Create creates a new 4n6time SQLite database with the full schema.
+// CreateSQLite creates a new 4n6time SQLite database with the full schema.
 // indexFields specifies which columns to index. Pass nil to use DefaultIndexFields.
-func Create(path string, indexFields []string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path)
+func CreateSQLite(path string, indexFields []string) (*SQLiteStore, error) {
+	d := &SQLiteDialect{}
+
+	conn, err := sql.Open(d.DriverName(), d.DSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("creating database: %w", err)
 	}
 
-	db := &DB{path: path, conn: conn}
+	db := &SQLiteStore{path: path, conn: conn, dialect: d}
 
 	if err := db.createSchema(indexFields); err != nil {
 		conn.Close()
@@ -90,7 +100,7 @@ func Create(path string, indexFields []string) (*DB, error) {
 }
 
 // Close closes the database connection.
-func (db *DB) Close() error {
+func (db *SQLiteStore) Close() error {
 	if db.conn != nil {
 		return db.conn.Close()
 	}
@@ -98,17 +108,17 @@ func (db *DB) Close() error {
 }
 
 // Path returns the file path of the database.
-func (db *DB) Path() string {
+func (db *SQLiteStore) Path() string {
 	return db.path
 }
 
 // Conn returns the underlying *sql.DB connection for advanced query usage.
-func (db *DB) Conn() *sql.DB {
+func (db *SQLiteStore) Conn() *sql.DB {
 	return db.conn
 }
 
 // createSchema builds all tables and indexes for a new database.
-func (db *DB) createSchema(indexFields []string) error {
+func (db *SQLiteStore) createSchema(indexFields []string) error {
 	if indexFields == nil {
 		indexFields = DefaultIndexFields
 	}
@@ -120,17 +130,7 @@ func (db *DB) createSchema(indexFields []string) error {
 	defer tx.Rollback()
 
 	// Main event table
-	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS log2timeline (
-		timezone TEXT, MACB TEXT, source TEXT, sourcetype TEXT,
-		type TEXT, user TEXT, host TEXT, desc TEXT, filename TEXT,
-		inode TEXT, notes TEXT, format TEXT, extra TEXT,
-		datetime DATETIME, reportnotes TEXT, inreport TEXT,
-		tag TEXT, color TEXT, offset INT, store_number INT,
-		store_index INT, vss_store_number INT, URL TEXT,
-		record_number TEXT, event_identifier TEXT, event_type TEXT,
-		source_name TEXT, user_sid TEXT, computer_name TEXT,
-		bookmark INT DEFAULT 0
-	)`)
+	_, err = tx.Exec(db.dialect.CreateTableSQL())
 	if err != nil {
 		return fmt.Errorf("creating log2timeline table: %w", err)
 	}
@@ -138,46 +138,39 @@ func (db *DB) createSchema(indexFields []string) error {
 	// Metadata tables for filter dropdowns (distinct values + frequency)
 	for _, f := range metadataFields {
 		tableName := "l2t_" + f + "s"
-		_, err = tx.Exec(fmt.Sprintf(
-			"CREATE TABLE IF NOT EXISTS %s (%s TEXT, frequency INT)", tableName, f))
+		_, err = tx.Exec(db.dialect.CreateMetadataTableSQL(tableName, f))
 		if err != nil {
 			return fmt.Errorf("creating metadata table %s: %w", tableName, err)
 		}
 	}
 
 	// Tags table
-	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS l2t_tags (tag TEXT)")
+	_, err = tx.Exec(db.dialect.CreateTagsTableSQL())
 	if err != nil {
 		return fmt.Errorf("creating l2t_tags table: %w", err)
 	}
 
 	// Saved queries table
-	_, err = tx.Exec("CREATE TABLE IF NOT EXISTS l2t_saved_query (name TEXT, query TEXT)")
+	_, err = tx.Exec(db.dialect.CreateSavedQueryTableSQL())
 	if err != nil {
 		return fmt.Errorf("creating l2t_saved_query table: %w", err)
 	}
 
 	// Disk image config table
-	_, err = tx.Exec(`CREATE TABLE IF NOT EXISTS l2t_disk (
-		disk_type INT, mount_path TEXT, dd_path TEXT,
-		dd_offset TEXT, storage_file TEXT, export_path TEXT
-	)`)
+	_, err = tx.Exec(db.dialect.CreateDiskTableSQL())
 	if err != nil {
 		return fmt.Errorf("creating l2t_disk table: %w", err)
 	}
 
 	// Insert default disk config row
-	_, err = tx.Exec(`INSERT INTO l2t_disk
-		(disk_type, mount_path, dd_path, dd_offset, storage_file, export_path)
-		VALUES (0, '', '', '', '', '')`)
+	_, err = tx.Exec(db.dialect.InsertDefaultDiskSQL())
 	if err != nil {
 		return fmt.Errorf("inserting default disk config: %w", err)
 	}
 
 	// Create indexes
 	for _, field := range indexFields {
-		_, err = tx.Exec(fmt.Sprintf(
-			"CREATE INDEX IF NOT EXISTS %s_idx ON log2timeline (%s)", field, field))
+		_, err = tx.Exec(db.dialect.CreateIndexSQL(field+"_idx", "log2timeline", field))
 		if err != nil {
 			return fmt.Errorf("creating index on %s: %w", field, err)
 		}
@@ -187,8 +180,8 @@ func (db *DB) createSchema(indexFields []string) error {
 }
 
 // InsertEvent inserts a single event into the database.
-func (db *DB) InsertEvent(e *model.Event) error {
-	_, err := db.conn.Exec(insertEventSQL,
+func (db *SQLiteStore) InsertEvent(e *model.Event) error {
+	_, err := db.conn.Exec(db.dialect.InsertEventSQL(),
 		e.Timezone, e.MACB, e.Source, e.SourceType, e.Type,
 		e.User, e.Host, e.Desc, e.Filename, e.Inode,
 		e.Notes, e.Format, e.Extra, e.Datetime, e.ReportNotes,
@@ -203,14 +196,14 @@ func (db *DB) InsertEvent(e *model.Event) error {
 // InsertEvents inserts a batch of events inside a single transaction.
 // The onProgress callback is called every 10,000 events with the current count.
 // Pass nil for onProgress if you don't need progress updates.
-func (db *DB) InsertEvents(events []*model.Event, onProgress func(count int)) (int, error) {
+func (db *SQLiteStore) InsertEvents(events []*model.Event, onProgress func(count int)) (int, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(insertEventSQL)
+	stmt, err := tx.Prepare(db.dialect.InsertEventSQL())
 	if err != nil {
 		return 0, fmt.Errorf("preparing insert statement: %w", err)
 	}
@@ -246,8 +239,9 @@ func (db *DB) InsertEvents(events []*model.Event, onProgress func(count int)) (i
 // QueryEvents runs a SQL query and returns the matching events.
 // The query should be a full SELECT statement or a WHERE clause.
 // If whereClause is provided, it's wrapped in a full SELECT from log2timeline.
-func (db *DB) QueryEvents(whereClause string, args []interface{}, orderBy string, limit, offset int) ([]*model.Event, error) {
-	query := "SELECT rowid, timezone, MACB, source, sourcetype, type, user, host, " +
+func (db *SQLiteStore) QueryEvents(whereClause string, args []interface{}, orderBy string, limit, offset int) ([]*model.Event, error) {
+	idCol := db.dialect.IDColumn()
+	query := "SELECT " + idCol + ", timezone, MACB, source, sourcetype, type, user, host, " +
 		"desc, filename, inode, notes, format, extra, datetime, reportnotes, " +
 		"inreport, tag, color, offset, store_number, store_index, vss_store_number, " +
 		"URL, record_number, event_identifier, event_type, source_name, user_sid, " +
@@ -278,8 +272,9 @@ func (db *DB) QueryEvents(whereClause string, args []interface{}, orderBy string
 }
 
 // CountEvents returns the total number of events, optionally filtered by a WHERE clause.
-func (db *DB) CountEvents(whereClause string, args []interface{}) (int64, error) {
-	query := "SELECT COUNT(rowid) FROM log2timeline"
+func (db *SQLiteStore) CountEvents(whereClause string, args []interface{}) (int64, error) {
+	idCol := db.dialect.IDColumn()
+	query := "SELECT COUNT(" + idCol + ") FROM log2timeline"
 	if whereClause != "" {
 		query += " WHERE " + whereClause
 	}
@@ -291,7 +286,7 @@ func (db *DB) CountEvents(whereClause string, args []interface{}) (int64, error)
 
 // GetMinMaxDate returns the earliest and latest datetime values in the database,
 // excluding the sentinel value '0000-00-00 00:00:00'.
-func (db *DB) GetMinMaxDate() (minDate, maxDate string, err error) {
+func (db *SQLiteStore) GetMinMaxDate() (minDate, maxDate string, err error) {
 	err = db.conn.QueryRow(
 		"SELECT COALESCE(min(datetime), ''), COALESCE(max(datetime), '') FROM log2timeline WHERE datetime > '1970-01-01' AND datetime < '2100-01-01'",
 	).Scan(&minDate, &maxDate)
@@ -299,7 +294,7 @@ func (db *DB) GetMinMaxDate() (minDate, maxDate string, err error) {
 }
 
 // GetDistinctValues returns a map of distinct values and their counts for a given column.
-func (db *DB) GetDistinctValues(fieldName string) (map[string]int64, error) {
+func (db *SQLiteStore) GetDistinctValues(fieldName string) (map[string]int64, error) {
 	// Validate field name against known fields to prevent injection
 	if !isValidField(fieldName) {
 		return nil, fmt.Errorf("invalid field name: %s", fieldName)
@@ -330,7 +325,7 @@ func (db *DB) GetDistinctValues(fieldName string) (map[string]int64, error) {
 
 // GetDistinctTags returns all unique tags from the events table.
 // Tags can be comma-separated within a single field, so this splits them.
-func (db *DB) GetDistinctTags() ([]string, error) {
+func (db *SQLiteStore) GetDistinctTags() ([]string, error) {
 	rows, err := db.conn.Query("SELECT DISTINCT tag FROM log2timeline")
 	if err != nil {
 		return nil, err
@@ -360,7 +355,7 @@ func (db *DB) GetDistinctTags() ([]string, error) {
 }
 
 // UpdateEvent updates specific fields of an event identified by rowid.
-func (db *DB) UpdateEvent(rowid int64, fields map[string]interface{}) error {
+func (db *SQLiteStore) UpdateEvent(rowid int64, fields map[string]interface{}) error {
 	if len(fields) == 0 {
 		return nil
 	}
@@ -369,17 +364,20 @@ func (db *DB) UpdateEvent(rowid int64, fields map[string]interface{}) error {
 	setClauses := make([]string, 0, len(fields))
 	args := make([]interface{}, 0, len(fields)+1)
 
+	paramIdx := 1
 	for field, value := range fields {
 		if !isValidField(field) {
 			return fmt.Errorf("invalid field name: %s", field)
 		}
-		setClauses = append(setClauses, field+" = ?")
+		setClauses = append(setClauses, field+" = "+db.dialect.Placeholder(paramIdx))
+		paramIdx++
 		args = append(args, value)
 	}
 	args = append(args, rowid)
 
-	query := fmt.Sprintf("UPDATE log2timeline SET %s WHERE rowid = ?",
-		strings.Join(setClauses, ", "))
+	idCol := db.dialect.IDColumn()
+	query := fmt.Sprintf("UPDATE log2timeline SET %s WHERE %s = %s",
+		strings.Join(setClauses, ", "), idCol, db.dialect.Placeholder(paramIdx))
 
 	_, err := db.conn.Exec(query, args...)
 	return err
@@ -387,7 +385,7 @@ func (db *DB) UpdateEvent(rowid int64, fields map[string]interface{}) error {
 
 // UpdateMetadata refreshes all metadata tables (l2t_sources, l2t_hosts, etc.)
 // with current distinct values from the main table.
-func (db *DB) UpdateMetadata() error {
+func (db *SQLiteStore) UpdateMetadata() error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
@@ -425,7 +423,7 @@ func (db *DB) UpdateMetadata() error {
 	}
 
 	seen := make(map[string]bool)
-	tagStmt, err := tx.Prepare("INSERT INTO l2t_tags (tag) VALUES (?)")
+	tagStmt, err := tx.Prepare("INSERT INTO l2t_tags (tag) VALUES (" + db.dialect.Placeholder(1) + ")")
 	if err != nil {
 		rows.Close()
 		return fmt.Errorf("preparing tag insert: %w", err)
@@ -462,7 +460,7 @@ func (db *DB) UpdateMetadata() error {
 }
 
 // RebuildIndexes drops all existing indexes and creates new ones for the given fields.
-func (db *DB) RebuildIndexes(indexFields []string) error {
+func (db *SQLiteStore) RebuildIndexes(indexFields []string) error {
 	tx, err := db.conn.Begin()
 	if err != nil {
 		return err
@@ -471,7 +469,7 @@ func (db *DB) RebuildIndexes(indexFields []string) error {
 
 	// Drop all existing indexes
 	for _, f := range model.Fields {
-		_, err = tx.Exec(fmt.Sprintf("DROP INDEX IF EXISTS %s_idx", f))
+		_, err = tx.Exec(db.dialect.DropIndexSQL(f + "_idx"))
 		if err != nil {
 			return fmt.Errorf("dropping index %s_idx: %w", f, err)
 		}
@@ -479,7 +477,7 @@ func (db *DB) RebuildIndexes(indexFields []string) error {
 
 	// Create new indexes
 	for _, f := range indexFields {
-		_, err = tx.Exec(fmt.Sprintf("CREATE INDEX IF NOT EXISTS %s_idx ON log2timeline (%s)", f, f))
+		_, err = tx.Exec(db.dialect.CreateIndexSQL(f+"_idx", "log2timeline", f))
 		if err != nil {
 			return fmt.Errorf("creating index %s_idx: %w", f, err)
 		}
@@ -495,7 +493,7 @@ type SavedQuery struct {
 }
 
 // GetSavedQueries returns all saved queries from the database.
-func (db *DB) GetSavedQueries() ([]SavedQuery, error) {
+func (db *SQLiteStore) GetSavedQueries() ([]SavedQuery, error) {
 	rows, err := db.conn.Query("SELECT name, query FROM l2t_saved_query")
 	if err != nil {
 		return nil, err
@@ -514,15 +512,153 @@ func (db *DB) GetSavedQueries() ([]SavedQuery, error) {
 }
 
 // SaveQuery stores a named query in the database.
-func (db *DB) SaveQuery(name, query string) error {
-	_, err := db.conn.Exec("INSERT INTO l2t_saved_query (name, query) VALUES (?, ?)", name, query)
+func (db *SQLiteStore) SaveQuery(name, query string) error {
+	_, err := db.conn.Exec(
+		"INSERT INTO l2t_saved_query (name, query) VALUES ("+db.dialect.Placeholder(1)+", "+db.dialect.Placeholder(2)+")",
+		name, query,
+	)
 	return err
 }
 
 // DeleteQuery removes a saved query by name.
-func (db *DB) DeleteQuery(name string) error {
-	_, err := db.conn.Exec("DELETE FROM l2t_saved_query WHERE name = ?", name)
+func (db *SQLiteStore) DeleteQuery(name string) error {
+	_, err := db.conn.Exec(
+		"DELETE FROM l2t_saved_query WHERE name = "+db.dialect.Placeholder(1),
+		name,
+	)
 	return err
+}
+
+// Migrate applies any pending schema migrations.
+func (db *SQLiteStore) Migrate() error {
+	db.migrate()
+	return nil
+}
+
+// ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
+// column order. This is used for queries built by query.go's Build() method,
+// where the SELECT list is: rowid, datetime, timezone, MACB, source, ...
+// (Pattern B scan order, distinct from QueryEvents' Pattern A order.)
+func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
+	rows, err := db.conn.Query(sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("executing query: %w", err)
+	}
+	defer rows.Close()
+	return scanFieldsOrderEvents(rows)
+}
+
+// ExecuteCountQuery runs a pre-built COUNT query and returns the result.
+func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
+	var count int64
+	err := db.conn.QueryRow(sqlStr, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("executing count query: %w", err)
+	}
+	return count, nil
+}
+
+// GetTimelineHistogram returns event counts bucketed by time interval.
+// whereClause should include the "WHERE" keyword if non-empty (e.g. "WHERE datetime > '1970-01-01'").
+// whereArgs are the parameter values for any placeholders in the clause.
+// The bucket size is automatically chosen based on the filtered date range.
+func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}) ([]TimelineBucket, error) {
+	// Get date range to determine bucket size
+	rangeSQL := "SELECT MIN(datetime), MAX(datetime) FROM log2timeline"
+	if whereClause != "" {
+		rangeSQL += " " + whereClause
+	}
+
+	var minDate, maxDate string
+	if err := db.conn.QueryRow(rangeSQL, whereArgs...).Scan(&minDate, &maxDate); err != nil {
+		return nil, fmt.Errorf("getting date range: %w", err)
+	}
+
+	if minDate == "" || maxDate == "" {
+		return []TimelineBucket{}, nil
+	}
+
+	// Choose bucket format based on date range span
+	bucketFormat := "%Y-%m-%d %H:00:00" // default: hourly
+
+	if len(minDate) >= 10 && len(maxDate) >= 10 {
+		minDay := minDate[:10]
+		maxDay := maxDate[:10]
+
+		if minDay == maxDay {
+			bucketFormat = "%Y-%m-%d %H:00:00"
+		} else {
+			minYM := minDate[:7]
+			maxYM := maxDate[:7]
+			if minYM == maxYM {
+				bucketFormat = "%Y-%m-%d"
+			} else {
+				minYear := minDate[:4]
+				maxYear := maxDate[:4]
+				if minYear != maxYear {
+					bucketFormat = "%Y-%m"
+				} else {
+					bucketFormat = "%Y-%m-%d"
+				}
+			}
+		}
+	}
+
+	// Build and run histogram query using dialect-specific date formatting
+	bucketExpr := db.dialect.DateFormatSQL("datetime", bucketFormat)
+	histSQL := "SELECT " + bucketExpr + " as bucket, COUNT(*) as cnt FROM log2timeline"
+	if whereClause != "" {
+		histSQL += " " + whereClause
+	}
+	histSQL += " GROUP BY bucket ORDER BY bucket"
+
+	rows, err := db.conn.Query(histSQL, whereArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("histogram query: %w", err)
+	}
+	defer rows.Close()
+
+	var buckets []TimelineBucket
+	for rows.Next() {
+		var b TimelineBucket
+		if err := rows.Scan(&b.Timestamp, &b.Count); err != nil {
+			return nil, fmt.Errorf("scanning bucket: %w", err)
+		}
+		buckets = append(buckets, b)
+	}
+
+	return buckets, rows.Err()
+}
+
+// scanFieldsOrderEvents scans rows using model.Fields column order.
+// This matches the SELECT generated by query.go's Build() method:
+//
+//	rowid, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
+//	filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
+//	offset, store_number, store_index, vss_store_number, URL, record_number,
+//	event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+//
+// Note: datetime is at position 2 (right after rowid), NOT at position 15.
+// This is Pattern B, distinct from scanEvents which uses Pattern A.
+func scanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
+	var events []*model.Event
+	for rows.Next() {
+		e := &model.Event{}
+		err := rows.Scan(
+			&e.ID, &e.Datetime, &e.Timezone, &e.MACB, &e.Source, &e.SourceType,
+			&e.Type, &e.User, &e.Host, &e.Desc, &e.Filename,
+			&e.Inode, &e.Notes, &e.Format, &e.Extra, &e.ReportNotes,
+			&e.InReport, &e.Tag, &e.Color, &e.Offset, &e.StoreNumber,
+			&e.StoreIndex, &e.VSSStoreNumber, &e.URL, &e.RecordNumber,
+			&e.EventID, &e.EventType, &e.SourceName, &e.UserSID, &e.ComputerName,
+			&e.Bookmark,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scanning event row: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
 }
 
 // scanEvents converts sql.Rows into a slice of Event pointers.
@@ -557,11 +693,3 @@ func isValidField(name string) bool {
 	}
 	return false
 }
-
-// The parameterized INSERT statement for events. 30 columns, 30 placeholders.
-const insertEventSQL = `INSERT INTO log2timeline (
-	timezone, MACB, source, sourcetype, type, user, host, desc, filename,
-	inode, notes, format, extra, datetime, reportnotes, inreport, tag, color,
-	offset, store_number, store_index, vss_store_number, URL, record_number,
-	event_identifier, event_type, source_name, user_sid, computer_name, bookmark
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

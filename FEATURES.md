@@ -1,13 +1,13 @@
 # 4n6time-go Feature Tracker
 
-Last updated: 2026-02-12
+Last updated: 2026-02-16
 
 ## Planned / Discussed
 
 | # | Feature | Notes |
 |---|---------|-------|
 | 1 | XLSX import support | Requires a Go library for reading Excel files. |
-| 2 | Multi-database backend support (MySQL, PostgreSQL) | Abstract the database layer behind an interface. SQLite stays as default for portability. Addresses SQLite file size limitations for very large datasets. |
+| 2 | Multi-database backend support (MySQL) | PostgreSQL added in v0.9.0. MySQL still planned. SQLite stays as default for portability. |
 | 3 | Keyboard shortcuts reference | Add more shortcuts first (Ctrl+F search focus, Escape close panels, etc.), then document in Help dialog. |
 | 4 | Report generation | Export tagged/colored events as a formatted summary. |
 | 5 | Statistics panel | Event counts by source, type, host, time distribution. |
@@ -43,3 +43,9 @@ Last updated: 2026-02-12
 | v0.8.0 | Event bookmarking (star toggle in grid and detail panel, filter to show bookmarked only, stored in database) |
 | v0.8.0 | Format auto-detection for all import types (extension-based with fallback validation) |
 | v0.8.0 | Database migration for backward compatibility with pre-0.8.0 databases |
+| v0.8.1 | Bug fixes |
+| v0.9.0 | PostgreSQL database support (connect, create schema, import directly, push from SQLite) |
+| v0.9.0 | Database abstraction layer (Store interface, Dialect system, factory pattern) |
+| v0.9.0 | Enhanced pagination controls (First, Last, Go-to-page input, "Page X of Y" display) |
+| v0.9.0 | Logging system (Help > Logging, file output, optional persistence between sessions) |
+| v0.9.0 | Export CSV respects bookmark-only and search text filters |

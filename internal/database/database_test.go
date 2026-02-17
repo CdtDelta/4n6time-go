@@ -13,9 +13,9 @@ func tempDBPath(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "test.db")
 }
 
-func createTestDB(t *testing.T) *DB {
+func createTestDB(t *testing.T) *SQLiteStore {
 	t.Helper()
-	db, err := Create(tempDBPath(t), nil)
+	db, err := CreateSQLite(tempDBPath(t), nil)
 	if err != nil {
 		t.Fatalf("failed to create test db: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestCreateAndOpen(t *testing.T) {
 	path := tempDBPath(t)
 
 	// Create a new database
-	db, err := Create(path, nil)
+	db, err := CreateSQLite(path, nil)
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestCreateAndOpen(t *testing.T) {
 	}
 
 	// Reopen it
-	db2, err := Open(path)
+	db2, err := OpenSQLite(path)
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}

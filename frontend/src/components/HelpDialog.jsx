@@ -6,17 +6,22 @@ const helpSections = [
     title: 'Getting Started',
     content: `4n6time is a forensic timeline analysis tool that helps investigators view, filter, and analyze digital forensic timelines.
 
-To begin, you can either open an existing database or import a timeline file:
+To begin, you can either open an existing database, import a timeline file, or connect to a PostgreSQL server:
 
 Open Database: Opens a previously created SQLite database file (.db). Use File > Open Database or the Open button in the toolbar.
 
-Import Timeline: Imports a timeline file and creates a new SQLite database. Use File > Import Timeline or the Import button in the toolbar. You will be prompted to choose or create a database file, then select the timeline file to import.
+Import Timeline: Imports a timeline file and creates a new SQLite database. Use File > Import Timeline or the Import button in the toolbar. You will be prompted to choose or create a database file, then select the timeline file to import. If you are already connected to a PostgreSQL database, importing writes directly to the server without prompting for a local file.
+
+PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
 Supported import formats:
 - CSV: Standard log2timeline/Plaso CSV output (comma-delimited with standard forensic timeline columns)
 - JSONL: Plaso JSON Lines output (both psort json_line format and raw Plaso storage format are supported)
+- TLN: 5-field pipe-delimited timeline format
+- L2TTLN: 7-field pipe-delimited extended timeline format
+- Dynamic CSV: Plaso default output with variable columns defined by header row
 
-After import, events are stored in a local SQLite database for fast querying and can be reopened at any time without reimporting.`
+After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
   {
     id: 'filtering',
@@ -108,7 +113,7 @@ Color-tagged events appear with a colored left border and subtle background tint
     title: 'Exporting Data',
     content: `Export your current view to a CSV file using File > Export CSV or the Export CSV button in the toolbar.
 
-The export respects your current filters, search, and date range. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
+The export respects your current filters, search, date range, and bookmark-only filter. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
 
 You will be prompted to choose a filename and location for the exported CSV file.`
   },
@@ -120,6 +125,45 @@ You will be prompted to choose a filename and location for the exported CSV file
 Available themes: Forensic Dark (default), Classic Dark, High Contrast, Light, Solarized Dark, Monokai, Dracula, Nord, Gruvbox, Matrix, and Forensic Blue.
 
 High Contrast is designed for maximum readability. Light theme is available for well-lit environments. Your theme selection is saved and persists across sessions.`
+  },
+  {
+    id: 'postgresql',
+    title: 'PostgreSQL Support',
+    content: `4n6time can use a PostgreSQL server as an alternative to local SQLite databases. This is useful for team environments, larger datasets, or when you want centralized storage.
+
+Connecting: Click the PostgreSQL button on the welcome screen to open the connection dialog. Enter the host, port (default 5432), database name, username, and password. The SSL mode dropdown lets you choose between disable, require, verify-ca, and verify-full depending on your server configuration.
+
+Connect vs Create & Connect: Use "Connect" when the database already has the 4n6time schema (the log2timeline table and associated metadata tables). Use "Create & Connect" when connecting to an empty database for the first time. This creates all the required tables and indexes, then connects.
+
+Importing into PostgreSQL: When you are connected to a PostgreSQL database, clicking Import (or File > Import Timeline) imports the timeline file directly into the server. The save dialog for choosing a local database file is skipped since events go straight to PostgreSQL.
+
+Push to PostgreSQL: If you have a SQLite database open and want to copy its data to a PostgreSQL server, click the "Push to PostgreSQL" button in the toolbar. This opens the same connection dialog. After connecting, all events from the SQLite database are copied to the PostgreSQL server. Progress is reported in a dialog. The SQLite database remains open afterward so you can continue working locally.
+
+Switching back: To return to working with local SQLite databases, close the current database (File > Close Database or Ctrl+W) and open or import as usual.`
+  },
+  {
+    id: 'pagination',
+    title: 'Pagination',
+    content: `Events are displayed 1,000 per page with pagination controls in the toolbar.
+
+Navigation buttons: First goes to page 1. Prev goes back one page. Next advances one page. Last goes to the final page. Buttons are disabled when you are already at the corresponding boundary.
+
+Page input: The page number between Prev and Next is an editable field. Type a page number and press Enter to jump directly to that page. The value is validated to be between 1 and the total page count. If you type an invalid value and leave the field, it reverts to the current page number.
+
+The total event count matching your current filters and search is displayed to the right of the pagination controls.`
+  },
+  {
+    id: 'logging',
+    title: 'Logging',
+    content: `4n6time includes a logging system for troubleshooting. Access it from Help > Logging.
+
+Enabling logging: Click "Enable Logging" in the Logging dialog. You will be prompted to choose a location and filename for the log file. Once enabled, the dialog shows the log file path and a green "Enabled" badge.
+
+What gets logged: Application startup and shutdown, database open and close events, import operations (start, duration, event count), push to PostgreSQL operations, query errors, export CSV operations, PostgreSQL connection events, and logging enable/disable events. Each entry includes a timestamp and level (INFO or ERROR).
+
+Disabling logging: Click "Disable Logging" to stop writing to the log file. The file is closed and can be reviewed with any text editor.
+
+Persistence: Check "Resume logging on next launch" to have logging automatically restart when you open 4n6time. The log file is reopened in append mode so previous entries are preserved. Uncheck the option to stop automatic logging on future launches. This setting is stored in your system config directory.`
   },
   {
     id: 'data-formats',

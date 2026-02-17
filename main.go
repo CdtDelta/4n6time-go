@@ -63,6 +63,10 @@ func main() {
 		runtime.EventsEmit(app.ctx, "menu:help")
 	})
 	helpMenu.AddSeparator()
+	helpMenu.AddText("Logging...", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:logging")
+	})
+	helpMenu.AddSeparator()
 	helpMenu.AddText("About 4n6time", nil, func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:about")
 	})

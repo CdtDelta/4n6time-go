@@ -6,8 +6,24 @@ export function CloseDatabase() {
   return window['go']['main']['App']['CloseDatabase']();
 }
 
+export function ConnectPostgres(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['ConnectPostgres'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
+export function CreatePostgresDatabase(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['CreatePostgresDatabase'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function DeleteSavedQuery(arg1) {
   return window['go']['main']['App']['DeleteSavedQuery'](arg1);
+}
+
+export function DisableLogging() {
+  return window['go']['main']['App']['DisableLogging']();
+}
+
+export function EnableLogging() {
+  return window['go']['main']['App']['EnableLogging']();
 }
 
 export function ExportCSV(arg1) {
@@ -16,6 +32,10 @@ export function ExportCSV(arg1) {
 
 export function GetDistinctValues(arg1) {
   return window['go']['main']['App']['GetDistinctValues'](arg1);
+}
+
+export function GetLoggingStatus() {
+  return window['go']['main']['App']['GetLoggingStatus']();
 }
 
 export function GetMinMaxDate() {
@@ -46,12 +66,20 @@ export function OpenDatabase() {
   return window['go']['main']['App']['OpenDatabase']();
 }
 
+export function PushToPostgres(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['PushToPostgres'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function QueryEvents(arg1) {
   return window['go']['main']['App']['QueryEvents'](arg1);
 }
 
 export function SaveQuery(arg1, arg2) {
   return window['go']['main']['App']['SaveQuery'](arg1, arg2);
+}
+
+export function SetLoggingPersist(arg1) {
+  return window['go']['main']['App']['SetLoggingPersist'](arg1);
 }
 
 export function ToggleBookmark(arg1) {

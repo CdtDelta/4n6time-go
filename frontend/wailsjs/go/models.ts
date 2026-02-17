@@ -21,6 +21,7 @@ export namespace main {
 	
 	export class DBInfo {
 	    path: string;
+	    driver: string;
 	    eventCount: number;
 	    minDate: string;
 	    maxDate: string;
@@ -32,6 +33,7 @@ export namespace main {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
+	        this.driver = source["driver"];
 	        this.eventCount = source["eventCount"];
 	        this.minDate = source["minDate"];
 	        this.maxDate = source["maxDate"];
@@ -51,6 +53,22 @@ export namespace main {
 	        this.field = source["field"];
 	        this.operator = source["operator"];
 	        this.value = source["value"];
+	    }
+	}
+	export class LoggingStatus {
+	    enabled: boolean;
+	    filePath: string;
+	    persist: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LoggingStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.filePath = source["filePath"];
+	        this.persist = source["persist"];
 	    }
 	}
 	export class QueryRequest {

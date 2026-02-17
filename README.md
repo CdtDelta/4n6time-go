@@ -9,17 +9,20 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 ## Features
 
 - Import L2T CSV, Plaso JSONL, TLN, L2TTLN, and dynamic CSV files (tested with 2GB+ files, millions of events)
-- Server-side pagination for fast navigation of large datasets
+- **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
+- Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
 - Filter panel with AND/OR logic, date range, and multi-field filters
 - Timeline histogram with click-to-filter and drag-to-select range
 - Resizable event detail panel with editable tags, colors, and notes
 - Bookmark events with star toggle (filter to show bookmarked only)
 - Color-coded rows for marking events of interest
+- Push SQLite data to a PostgreSQL server for sharing with a team
 - Saved queries (stored in the database file)
 - Column visibility toggle (show/hide any of the 24+ columns)
 - Export filtered results to CSV
 - 11 UI themes (Forensic Dark, Classic Dark, High Contrast, Light, Solarized, Monokai, Dracula, Nord, Gruvbox, Matrix, Forensic Blue)
+- Built-in logging system for troubleshooting (Help > Logging)
 - Built-in user guide (no internet required)
 - Native desktop menus with keyboard shortcuts
 - Multi-platform builds via GitHub Actions (Linux, Windows, macOS)
@@ -38,7 +41,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ## Tech Stack
 
-- **Backend:** Go, SQLite (modernc.org/sqlite, pure Go)
+- **Backend:** Go, SQLite (modernc.org/sqlite, pure Go), PostgreSQL (pgx)
 - **Frontend:** React, AG Grid, Recharts
 - **Framework:** Wails v2 (native desktop, no Electron)
 
@@ -85,6 +88,16 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 7. Use **Columns** to show or hide fields in the grid
 8. Use **Export CSV** to save filtered results
 9. Change the UI theme via **View > Theme** (Ctrl+T)
+
+### PostgreSQL Support
+
+4n6time can connect to a PostgreSQL server as an alternative to local SQLite databases:
+
+1. Click **PostgreSQL** on the welcome screen to open the connection dialog
+2. Enter connection details: host, port, database name, username, password, and SSL mode
+3. Click **Connect** to connect to an existing database, or **Create & Connect** to create the schema on an empty database
+4. When connected to PostgreSQL, importing a timeline file writes directly to the server (no local file needed)
+5. To push an existing SQLite database to PostgreSQL, open the SQLite database first, then click the **Push to PostgreSQL** button in the toolbar
 
 ## Acknowledgments
 
