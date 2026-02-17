@@ -44,3 +44,7 @@ vendor/
 # Claude
 CLAUDE.md
 .claude/
+
+# Document folders
+Plans/
+doc/
