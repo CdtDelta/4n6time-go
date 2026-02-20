@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/cdtdelta/4n6time/internal/model"
@@ -58,6 +59,9 @@ func (db *SQLiteStore) migrate() {
 	if err == nil && count == 0 {
 		db.conn.Exec("ALTER TABLE log2timeline ADD COLUMN bookmark INT DEFAULT 0")
 	}
+
+	// Create examiner_notes table if missing
+	db.conn.Exec(db.dialect.CreateExaminerNotesTableSQL())
 }
 
 // ToggleBookmark toggles the bookmark flag on an event and returns the new value.
@@ -166,6 +170,12 @@ func (db *SQLiteStore) createSchema(indexFields []string) error {
 	_, err = tx.Exec(db.dialect.InsertDefaultDiskSQL())
 	if err != nil {
 		return fmt.Errorf("inserting default disk config: %w", err)
+	}
+
+	// Examiner notes table
+	_, err = tx.Exec(db.dialect.CreateExaminerNotesTableSQL())
+	if err != nil {
+		return fmt.Errorf("creating examiner_notes table: %w", err)
 	}
 
 	// Create indexes
@@ -294,6 +304,7 @@ func (db *SQLiteStore) GetMinMaxDate() (minDate, maxDate string, err error) {
 }
 
 // GetDistinctValues returns a map of distinct values and their counts for a given column.
+// Includes values from examiner_notes for source, sourcetype, and tag columns.
 func (db *SQLiteStore) GetDistinctValues(fieldName string) (map[string]int64, error) {
 	// Validate field name against known fields to prevent injection
 	if !isValidField(fieldName) {
@@ -320,7 +331,39 @@ func (db *SQLiteStore) GetDistinctValues(fieldName string) (map[string]int64, er
 			result[value] = count
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Include examiner_notes values for relevant columns
+	switch fieldName {
+	case "source":
+		var cnt int64
+		err := db.conn.QueryRow("SELECT COUNT(*) FROM examiner_notes").Scan(&cnt)
+		if err == nil && cnt > 0 {
+			result["EXAMINER"] = result["EXAMINER"] + cnt
+		}
+	case "sourcetype":
+		var cnt int64
+		err := db.conn.QueryRow("SELECT COUNT(*) FROM examiner_notes").Scan(&cnt)
+		if err == nil && cnt > 0 {
+			result["Examiner Note"] = result["Examiner Note"] + cnt
+		}
+	case "tag":
+		tagRows, err := db.conn.Query("SELECT tag, COUNT(tag) FROM examiner_notes WHERE tag != '' GROUP BY tag")
+		if err == nil {
+			defer tagRows.Close()
+			for tagRows.Next() {
+				var val string
+				var cnt int64
+				if err := tagRows.Scan(&val, &cnt); err == nil && val != "" {
+					result[val] = result[val] + cnt
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // GetDistinctTags returns all unique tags from the events table.
@@ -535,11 +578,229 @@ func (db *SQLiteStore) Migrate() error {
 	return nil
 }
 
+// InsertExaminerNote inserts a new examiner note and returns its negated ID.
+func (db *SQLiteStore) InsertExaminerNote(datetime, description, tag, color string) (int64, error) {
+	result, err := db.conn.Exec(db.dialect.InsertExaminerNoteSQL(),
+		datetime, description, tag, color, 0)
+	if err != nil {
+		return 0, fmt.Errorf("inserting examiner note: %w", err)
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("getting examiner note ID: %w", err)
+	}
+	return -id, nil
+}
+
+// DeleteExaminerNote deletes an examiner note by its positive internal ID.
+func (db *SQLiteStore) DeleteExaminerNote(id int64) error {
+	_, err := db.conn.Exec("DELETE FROM examiner_notes WHERE id = "+db.dialect.Placeholder(1), id)
+	if err != nil {
+		return fmt.Errorf("deleting examiner note: %w", err)
+	}
+	return nil
+}
+
+// UpdateExaminerNoteColor updates the color of an examiner note by its positive internal ID.
+func (db *SQLiteStore) UpdateExaminerNoteColor(id int64, color string) error {
+	_, err := db.conn.Exec(
+		"UPDATE examiner_notes SET color = "+db.dialect.Placeholder(1)+" WHERE id = "+db.dialect.Placeholder(2),
+		color, id)
+	if err != nil {
+		return fmt.Errorf("updating examiner note color: %w", err)
+	}
+	return nil
+}
+
+// ToggleExaminerNoteBookmark toggles the bookmark flag on an examiner note and returns the new value.
+func (db *SQLiteStore) ToggleExaminerNoteBookmark(id int64) (int64, error) {
+	_, err := db.conn.Exec(
+		"UPDATE examiner_notes SET bookmark = CASE WHEN bookmark = 1 THEN 0 ELSE 1 END WHERE id = "+db.dialect.Placeholder(1),
+		id)
+	if err != nil {
+		return 0, err
+	}
+	var val int64
+	err = db.conn.QueryRow(
+		"SELECT bookmark FROM examiner_notes WHERE id = "+db.dialect.Placeholder(1),
+		id).Scan(&val)
+	return val, err
+}
+
+// GetExaminerNotes returns all examiner notes as Event objects with negated IDs.
+func (db *SQLiteStore) GetExaminerNotes() ([]*model.Event, error) {
+	rows, err := db.conn.Query("SELECT id, datetime, description, tag, color, bookmark FROM examiner_notes ORDER BY datetime")
+	if err != nil {
+		return nil, fmt.Errorf("querying examiner notes: %w", err)
+	}
+	defer rows.Close()
+
+	var notes []*model.Event
+	for rows.Next() {
+		var id int64
+		var datetime, description, tag, color string
+		var bookmark int64
+		if err := rows.Scan(&id, &datetime, &description, &tag, &color, &bookmark); err != nil {
+			return nil, fmt.Errorf("scanning examiner note: %w", err)
+		}
+		notes = append(notes, &model.Event{
+			ID:         -id,
+			Datetime:   datetime,
+			Desc:       description,
+			Source:     "EXAMINER",
+			SourceType: "Examiner Note",
+			Tag:        tag,
+			Color:      color,
+			Bookmark:   bookmark,
+		})
+	}
+	return notes, rows.Err()
+}
+
+// BulkUpdateColor sets the color on multiple log2timeline events in a single transaction.
+func (db *SQLiteStore) BulkUpdateColor(ids []int64, color string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE log2timeline SET color = ? WHERE rowid = ?", color, id); err != nil {
+			return fmt.Errorf("updating color for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkAddTag appends a tag to multiple log2timeline events, avoiding duplicates.
+func (db *SQLiteStore) BulkAddTag(ids []int64, tag string) error {
+	if len(ids) == 0 || tag == "" {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		var existing string
+		if err := tx.QueryRow("SELECT tag FROM log2timeline WHERE rowid = ?", id).Scan(&existing); err != nil {
+			return fmt.Errorf("reading tag for event %d: %w", id, err)
+		}
+		newTag := appendTagDedup(existing, tag)
+		if _, err := tx.Exec("UPDATE log2timeline SET tag = ? WHERE rowid = ?", newTag, id); err != nil {
+			return fmt.Errorf("updating tag for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkSetBookmark sets the bookmark value on multiple log2timeline events.
+func (db *SQLiteStore) BulkSetBookmark(ids []int64, bookmark int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE log2timeline SET bookmark = ? WHERE rowid = ?", bookmark, id); err != nil {
+			return fmt.Errorf("updating bookmark for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes.
+func (db *SQLiteStore) BulkUpdateExaminerNoteColor(ids []int64, color string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE examiner_notes SET color = ? WHERE id = ?", color, id); err != nil {
+			return fmt.Errorf("updating examiner note color for %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkSetExaminerNoteBookmark sets the bookmark value on multiple examiner notes.
+func (db *SQLiteStore) BulkSetExaminerNoteBookmark(ids []int64, bookmark int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE examiner_notes SET bookmark = ? WHERE id = ?", bookmark, id); err != nil {
+			return fmt.Errorf("updating examiner note bookmark for %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// appendTagDedup appends newTag to existing comma-separated tags, avoiding duplicates.
+func appendTagDedup(existing, newTag string) string {
+	if existing == "" {
+		return newTag
+	}
+	parts := strings.Split(existing, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	for _, p := range parts {
+		if strings.EqualFold(p, newTag) {
+			return existing
+		}
+	}
+	return existing + "," + newTag
+}
+
+// examinerNotesUnionPatternB returns a UNION ALL SELECT for examiner notes
+// that produces the same columns in Pattern B order (model.Fields).
+// The ID is negated so the frontend can distinguish notes from evidence events.
+func examinerNotesUnionPatternB(dialect Dialect) string {
+	// Pattern B: id, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
+	//            filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
+	//            offset, store_number, store_index, vss_store_number, URL, record_number,
+	//            event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+	return " UNION ALL SELECT " +
+		"-id, datetime, '' AS timezone, '' AS " + dialect.QuoteColumn("MACB") + ", " +
+		"'EXAMINER' AS source, 'Examiner Note' AS sourcetype, '' AS type, '' AS " + dialect.QuoteColumn("user") + ", " +
+		"'' AS host, description AS " + dialect.QuoteColumn("desc") + ", " +
+		"'' AS filename, '' AS inode, '' AS notes, '' AS format, '' AS extra, " +
+		"'' AS reportnotes, '' AS inreport, tag, color, " +
+		"0 AS " + dialect.QuoteColumn("offset") + ", 0 AS store_number, 0 AS store_index, " +
+		"0 AS vss_store_number, '' AS URL, '' AS record_number, " +
+		"'' AS event_identifier, '' AS event_type, '' AS source_name, " +
+		"'' AS user_sid, '' AS computer_name, bookmark " +
+		"FROM examiner_notes"
+}
+
 // ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
 // column order. This is used for queries built by query.go's Build() method,
 // where the SELECT list is: rowid, datetime, timezone, MACB, source, ...
 // (Pattern B scan order, distinct from QueryEvents' Pattern A order.)
+//
+// Examiner notes are merged via UNION ALL with negated IDs. The union is
+// wrapped in a subquery so the outer ORDER BY and LIMIT/OFFSET apply to both
+// evidence events and examiner notes together.
 func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
+	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect)
+
 	rows, err := db.conn.Query(sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
@@ -549,7 +810,10 @@ func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
+// Examiner notes are included in the count via UNION ALL.
 func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
+	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect)
+
 	var count int64
 	err := db.conn.QueryRow(sqlStr, args...).Scan(&count)
 	if err != nil {
@@ -628,6 +892,72 @@ func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []inte
 	}
 
 	return buckets, rows.Err()
+}
+
+// shouldIncludeExaminerNotes inspects a SQL statement for a source filter.
+// If the WHERE clause filters on a specific source value that is not 'EXAMINER',
+// examiner notes should be excluded from the UNION. Returns true if no source
+// filter is present, source equals 'EXAMINER', or the filter cannot be determined.
+func shouldIncludeExaminerNotes(sqlStr string) bool {
+	// Look for patterns like: source = 'VALUE' or source='VALUE' (case-insensitive)
+	re := regexp.MustCompile(`(?i)\bsource\s*=\s*'([^']*)'`)
+	matches := re.FindAllStringSubmatch(sqlStr, -1)
+	if len(matches) == 0 {
+		// No source equality filter found; include examiner notes
+		return true
+	}
+	// If any source filter matches 'EXAMINER', include notes
+	for _, m := range matches {
+		if strings.EqualFold(m[1], "EXAMINER") {
+			return true
+		}
+	}
+	// Source is filtered to something other than EXAMINER; exclude notes
+	return false
+}
+
+// wrapWithExaminerNotesUnion takes a query.Build() output and injects a UNION ALL
+// for examiner notes. The original query is expected to have the form:
+//
+//	SELECT ... FROM log2timeline [WHERE ...] [ORDER BY ...] [LIMIT ... OFFSET ...]
+//
+// This function extracts the ORDER BY and LIMIT/OFFSET clauses, wraps the base
+// SELECT and the examiner notes UNION ALL in a subquery, and re-applies the
+// ORDER BY and pagination on the outer query.
+//
+// If the query filters on a specific source that is not 'EXAMINER', the UNION
+// is skipped entirely and the original query is returned unchanged.
+func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect) string {
+	if !shouldIncludeExaminerNotes(sqlStr) {
+		return sqlStr
+	}
+
+	// Find ORDER BY clause position (case-insensitive search for " ORDER BY ")
+	upper := strings.ToUpper(sqlStr)
+	orderIdx := strings.Index(upper, " ORDER BY ")
+	if orderIdx < 0 {
+		// No ORDER BY: just append the union
+		return "SELECT * FROM (" + sqlStr + examinerNotesUnionPatternB(dialect) + ") AS combined"
+	}
+
+	basePart := sqlStr[:orderIdx]
+	tailPart := sqlStr[orderIdx:]
+
+	return "SELECT * FROM (" + basePart + examinerNotesUnionPatternB(dialect) + ") AS combined" + tailPart
+}
+
+// wrapCountWithExaminerNotes takes a query.BuildCount() output and adds the
+// examiner notes count. The original query has the form:
+//
+//	SELECT COUNT(rowid) FROM log2timeline [WHERE ...]
+//
+// If the query filters on a specific source that is not 'EXAMINER', the
+// examiner notes count is not added.
+func wrapCountWithExaminerNotes(sqlStr string, dialect Dialect) string {
+	if !shouldIncludeExaminerNotes(sqlStr) {
+		return sqlStr
+	}
+	return "SELECT (" + sqlStr + ") + (SELECT COUNT(*) FROM examiner_notes)"
 }
 
 // scanFieldsOrderEvents scans rows using model.Fields column order.

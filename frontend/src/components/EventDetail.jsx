@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { UpdateEventFields } from '../../wailsjs/go/main/App'
+import { UpdateEventFields, UpdateExaminerNoteColor } from '../../wailsjs/go/main/App'
 import HighlightText from './HighlightText'
 
 // Field groups for organized display
@@ -67,7 +67,8 @@ const colorDisplayMap = {
   'BLACK': '#2c3e50',
 }
 
-function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBookmark }) {
+function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBookmark, onDeleteNote }) {
+  const isExaminerNote = event && event.id < 0
   const [tag, setTag] = useState('')
   const [color, setColor] = useState('')
   const [notes, setNotes] = useState('')
@@ -91,21 +92,28 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
 
     setSaving(true)
     try {
-      const fields = {
-        tag: tag,
-        color: color,
-        notes: notes,
-        reportnotes: reportNotes,
+      if (isExaminerNote) {
+        // Examiner notes only support color updates
+        await UpdateExaminerNoteColor(event.id, color)
+        setDirty(false)
+        if (onUpdate) onUpdate(event.id, { color })
+      } else {
+        const fields = {
+          tag: tag,
+          color: color,
+          notes: notes,
+          reportnotes: reportNotes,
+        }
+        await UpdateEventFields(event.id, fields)
+        setDirty(false)
+        if (onUpdate) onUpdate(event.id, fields)
       }
-      await UpdateEventFields(event.id, fields)
-      setDirty(false)
-      if (onUpdate) onUpdate(event.id, fields)
     } catch (err) {
       console.error('Error saving event:', err)
     } finally {
       setSaving(false)
     }
-  }, [event, tag, color, notes, reportNotes, dirty, onUpdate])
+  }, [event, isExaminerNote, tag, color, notes, reportNotes, dirty, onUpdate])
 
   const handleKeyDown = useCallback((e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
@@ -118,7 +126,7 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
   return (
     <div className="detail-panel" onKeyDown={handleKeyDown} style={{ height: height || 280 }}>
       <div className="detail-header">
-        <span className="detail-title">Event Detail</span>
+        <span className="detail-title">{isExaminerNote ? 'Examiner Note' : 'Event Detail'}</span>
         <button
           className={`detail-bookmark ${event.bookmark ? 'active' : ''}`}
           onClick={() => onToggleBookmark && onToggleBookmark(event.id)}
@@ -127,6 +135,15 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
           {event.bookmark ? '\u2605' : '\u2606'}
         </button>
         <span className="detail-id">ID: {event.id}</span>
+        {isExaminerNote && onDeleteNote && (
+          <button
+            className="detail-delete-note"
+            onClick={() => onDeleteNote(event.id)}
+            title="Delete this examiner note"
+          >
+            Delete
+          </button>
+        )}
         <button className="detail-close" onClick={onClose}>x</button>
       </div>
 
@@ -172,15 +189,17 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
 
         {/* Editable fields */}
         <div className="detail-editable">
-          <div className="detail-edit-row">
-            <label>Tag</label>
-            <input
-              type="text"
-              value={tag}
-              placeholder="e.g. malware, lateral-movement"
-              onChange={(e) => { setTag(e.target.value); setDirty(true) }}
-            />
-          </div>
+          {!isExaminerNote && (
+            <div className="detail-edit-row">
+              <label>Tag</label>
+              <input
+                type="text"
+                value={tag}
+                placeholder="e.g. malware, lateral-movement"
+                onChange={(e) => { setTag(e.target.value); setDirty(true) }}
+              />
+            </div>
+          )}
 
           <div className="detail-edit-row">
             <label>Color</label>
@@ -200,25 +219,29 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
             </div>
           </div>
 
-          <div className="detail-edit-row">
-            <label>Notes</label>
-            <textarea
-              value={notes}
-              rows={2}
-              placeholder="Investigator notes..."
-              onChange={(e) => { setNotes(e.target.value); setDirty(true) }}
-            />
-          </div>
+          {!isExaminerNote && (
+            <>
+              <div className="detail-edit-row">
+                <label>Notes</label>
+                <textarea
+                  value={notes}
+                  rows={2}
+                  placeholder="Investigator notes..."
+                  onChange={(e) => { setNotes(e.target.value); setDirty(true) }}
+                />
+              </div>
 
-          <div className="detail-edit-row">
-            <label>Report Notes</label>
-            <textarea
-              value={reportNotes}
-              rows={2}
-              placeholder="Notes for report..."
-              onChange={(e) => { setReportNotes(e.target.value); setDirty(true) }}
-            />
-          </div>
+              <div className="detail-edit-row">
+                <label>Report Notes</label>
+                <textarea
+                  value={reportNotes}
+                  rows={2}
+                  placeholder="Notes for report..."
+                  onChange={(e) => { setReportNotes(e.target.value); setDirty(true) }}
+                />
+              </div>
+            </>
+          )}
 
           {dirty && (
             <div className="detail-save-bar">

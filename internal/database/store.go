@@ -36,6 +36,20 @@ type Store interface {
 	SaveQuery(name, query string) error
 	DeleteQuery(name string) error
 
+	// Examiner notes
+	InsertExaminerNote(datetime, description, tag, color string) (int64, error)
+	DeleteExaminerNote(id int64) error
+	UpdateExaminerNoteColor(id int64, color string) error
+	ToggleExaminerNoteBookmark(id int64) (int64, error)
+	GetExaminerNotes() ([]*model.Event, error)
+
+	// Bulk operations
+	BulkUpdateColor(ids []int64, color string) error
+	BulkAddTag(ids []int64, tag string) error
+	BulkSetBookmark(ids []int64, bookmark int64) error
+	BulkUpdateExaminerNoteColor(ids []int64, color string) error
+	BulkSetExaminerNoteBookmark(ids []int64, bookmark int64) error
+
 	// Schema and maintenance
 	UpdateMetadata() error
 	RebuildIndexes(fields []string) error

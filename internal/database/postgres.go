@@ -122,12 +122,188 @@ func (db *PostgresStore) migrate() {
 	if err == nil && count == 0 {
 		db.conn.Exec("ALTER TABLE log2timeline ADD COLUMN bookmark INT DEFAULT 0")
 	}
+
+	// Create examiner_notes table if missing
+	db.conn.Exec(db.dialect.CreateExaminerNotesTableSQL())
 }
 
 // Migrate applies any pending schema migrations.
 func (db *PostgresStore) Migrate() error {
 	db.migrate()
 	return nil
+}
+
+// InsertExaminerNote inserts a new examiner note and returns its negated ID.
+func (db *PostgresStore) InsertExaminerNote(datetime, description, tag, color string) (int64, error) {
+	var id int64
+	err := db.conn.QueryRow(db.dialect.InsertExaminerNoteSQL(),
+		pgSanitizeDatetime(datetime), pgSanitizeString(description),
+		pgSanitizeString(tag), pgSanitizeString(color), 0,
+	).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("inserting examiner note: %w", err)
+	}
+	return -id, nil
+}
+
+// DeleteExaminerNote deletes an examiner note by its positive internal ID.
+func (db *PostgresStore) DeleteExaminerNote(id int64) error {
+	_, err := db.conn.Exec("DELETE FROM examiner_notes WHERE id = "+db.dialect.Placeholder(1), id)
+	if err != nil {
+		return fmt.Errorf("deleting examiner note: %w", err)
+	}
+	return nil
+}
+
+// UpdateExaminerNoteColor updates the color of an examiner note by its positive internal ID.
+func (db *PostgresStore) UpdateExaminerNoteColor(id int64, color string) error {
+	_, err := db.conn.Exec(
+		"UPDATE examiner_notes SET color = "+db.dialect.Placeholder(1)+" WHERE id = "+db.dialect.Placeholder(2),
+		pgSanitizeString(color), id)
+	if err != nil {
+		return fmt.Errorf("updating examiner note color: %w", err)
+	}
+	return nil
+}
+
+// ToggleExaminerNoteBookmark toggles the bookmark flag on an examiner note and returns the new value.
+func (db *PostgresStore) ToggleExaminerNoteBookmark(id int64) (int64, error) {
+	_, err := db.conn.Exec(
+		"UPDATE examiner_notes SET bookmark = CASE WHEN bookmark = 1 THEN 0 ELSE 1 END WHERE id = "+db.dialect.Placeholder(1),
+		id)
+	if err != nil {
+		return 0, err
+	}
+	var val sql.NullInt64
+	err = db.conn.QueryRow(
+		"SELECT bookmark FROM examiner_notes WHERE id = "+db.dialect.Placeholder(1),
+		id).Scan(&val)
+	return val.Int64, err
+}
+
+// GetExaminerNotes returns all examiner notes as Event objects with negated IDs.
+func (db *PostgresStore) GetExaminerNotes() ([]*model.Event, error) {
+	rows, err := db.conn.Query("SELECT id, datetime, description, tag, color, bookmark FROM examiner_notes ORDER BY datetime")
+	if err != nil {
+		return nil, fmt.Errorf("querying examiner notes: %w", err)
+	}
+	defer rows.Close()
+
+	var notes []*model.Event
+	for rows.Next() {
+		var id int64
+		var datetime, description, tag, color sql.NullString
+		var bookmark sql.NullInt64
+		if err := rows.Scan(&id, &datetime, &description, &tag, &color, &bookmark); err != nil {
+			return nil, fmt.Errorf("scanning examiner note: %w", err)
+		}
+		notes = append(notes, &model.Event{
+			ID:         -id,
+			Datetime:   datetime.String,
+			Desc:       description.String,
+			Source:     "EXAMINER",
+			SourceType: "Examiner Note",
+			Tag:        tag.String,
+			Color:      color.String,
+			Bookmark:   bookmark.Int64,
+		})
+	}
+	return notes, rows.Err()
+}
+
+// BulkUpdateColor sets the color on multiple log2timeline events in a single transaction.
+func (db *PostgresStore) BulkUpdateColor(ids []int64, color string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE log2timeline SET color = $1 WHERE id = $2", color, id); err != nil {
+			return fmt.Errorf("updating color for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkAddTag appends a tag to multiple log2timeline events, avoiding duplicates.
+func (db *PostgresStore) BulkAddTag(ids []int64, tag string) error {
+	if len(ids) == 0 || tag == "" {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		var existing sql.NullString
+		if err := tx.QueryRow("SELECT tag FROM log2timeline WHERE id = $1", id).Scan(&existing); err != nil {
+			return fmt.Errorf("reading tag for event %d: %w", id, err)
+		}
+		newTag := appendTagDedup(existing.String, tag)
+		if _, err := tx.Exec("UPDATE log2timeline SET tag = $1 WHERE id = $2", newTag, id); err != nil {
+			return fmt.Errorf("updating tag for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkSetBookmark sets the bookmark value on multiple log2timeline events.
+func (db *PostgresStore) BulkSetBookmark(ids []int64, bookmark int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE log2timeline SET bookmark = $1 WHERE id = $2", bookmark, id); err != nil {
+			return fmt.Errorf("updating bookmark for event %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes.
+func (db *PostgresStore) BulkUpdateExaminerNoteColor(ids []int64, color string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE examiner_notes SET color = $1 WHERE id = $2", color, id); err != nil {
+			return fmt.Errorf("updating examiner note color for %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
+}
+
+// BulkSetExaminerNoteBookmark sets the bookmark value on multiple examiner notes.
+func (db *PostgresStore) BulkSetExaminerNoteBookmark(ids []int64, bookmark int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec("UPDATE examiner_notes SET bookmark = $1 WHERE id = $2", bookmark, id); err != nil {
+			return fmt.Errorf("updating examiner note bookmark for %d: %w", id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // ToggleBookmark toggles the bookmark flag on an event and returns the new value.
@@ -198,6 +374,12 @@ func (db *PostgresStore) createSchema(indexFields []string) error {
 	_, err = tx.Exec(db.dialect.InsertDefaultDiskSQL())
 	if err != nil {
 		return fmt.Errorf("inserting default disk config: %w", err)
+	}
+
+	// Examiner notes table
+	_, err = tx.Exec(db.dialect.CreateExaminerNotesTableSQL())
+	if err != nil {
+		return fmt.Errorf("creating examiner_notes table: %w", err)
 	}
 
 	// Create indexes
@@ -343,6 +525,7 @@ func (db *PostgresStore) GetMinMaxDate() (minDate, maxDate string, err error) {
 
 // GetDistinctValues returns a map of distinct values and their counts for a given column.
 // Uses pgQuoteCol to handle PostgreSQL reserved word columns.
+// Includes values from examiner_notes for source, sourcetype, and tag columns.
 func (db *PostgresStore) GetDistinctValues(fieldName string) (map[string]int64, error) {
 	if !isValidField(fieldName) {
 		return nil, fmt.Errorf("invalid field name: %s", fieldName)
@@ -369,7 +552,39 @@ func (db *PostgresStore) GetDistinctValues(fieldName string) (map[string]int64, 
 			result[value] = count
 		}
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Include examiner_notes values for relevant columns
+	switch fieldName {
+	case "source":
+		var cnt int64
+		err := db.conn.QueryRow("SELECT COUNT(*) FROM examiner_notes").Scan(&cnt)
+		if err == nil && cnt > 0 {
+			result["EXAMINER"] = result["EXAMINER"] + cnt
+		}
+	case "sourcetype":
+		var cnt int64
+		err := db.conn.QueryRow("SELECT COUNT(*) FROM examiner_notes").Scan(&cnt)
+		if err == nil && cnt > 0 {
+			result["Examiner Note"] = result["Examiner Note"] + cnt
+		}
+	case "tag":
+		tagRows, err := db.conn.Query("SELECT tag, COUNT(tag) FROM examiner_notes WHERE tag != '' GROUP BY tag")
+		if err == nil {
+			defer tagRows.Close()
+			for tagRows.Next() {
+				var val string
+				var cnt int64
+				if err := tagRows.Scan(&val, &cnt); err == nil && val != "" {
+					result[val] = result[val] + cnt
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // GetDistinctTags returns all unique tags from the events table.
@@ -577,7 +792,10 @@ func (db *PostgresStore) DeleteQuery(name string) error {
 
 // ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
 // column order (Pattern B: id, datetime, timezone, MACB, ...).
+// Examiner notes are merged via UNION ALL with negated IDs.
 func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
+	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect)
+
 	rows, err := db.conn.Query(sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
@@ -587,7 +805,10 @@ func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*mod
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
+// Examiner notes are included in the count via UNION ALL.
 func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
+	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect)
+
 	var count int64
 	err := db.conn.QueryRow(sqlStr, args...).Scan(&count)
 	if err != nil {

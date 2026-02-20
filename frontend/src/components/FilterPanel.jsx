@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetDistinctValues, GetMinMaxDate } from '../../wailsjs/go/main/App'
 
-function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters }) {
+function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion }) {
   const [filters, setFilters] = useState([])
   const [logic, setLogic] = useState('AND')
   const [dateFrom, setDateFrom] = useState('')
@@ -68,7 +68,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters }) {
 
     loadValues()
     return () => { cancelled = true }
-  }, [visible, dbInfo])
+  }, [visible, dbInfo, filterVersion])
 
   const addFilter = useCallback(() => {
     setFilters(prev => [...prev, { field: 'source', operator: '=', value: '' }])

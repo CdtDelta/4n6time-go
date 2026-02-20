@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres } from '../wailsjs/go/main/App'
+import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import PostgresDialog from './components/PostgresDialog'
 import FilterPanel from './components/FilterPanel'
@@ -15,10 +15,27 @@ import ThemePicker from './components/ThemePicker'
 import AboutDialog from './components/AboutDialog'
 import HelpDialog from './components/HelpDialog'
 import LoggingDialog from './components/LoggingDialog'
+import AddNoteDialog from './components/AddNoteDialog'
 import HighlightText from './components/HighlightText'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
+
+// Named color options matching the database format and EventDetail's color picker
+const bulkColorOptions = [
+  '', 'RED', 'ORANGE', 'YELLOW', 'GREEN', 'BLUE', 'PURPLE', 'WHITE', 'BLACK',
+]
+const bulkColorDisplayMap = {
+  '': 'transparent',
+  'RED': '#e74c3c',
+  'ORANGE': '#e67e22',
+  'YELLOW': '#f1c40f',
+  'GREEN': '#2ecc71',
+  'BLUE': '#3498db',
+  'PURPLE': '#9b59b6',
+  'WHITE': '#ecf0f1',
+  'BLACK': '#2c3e50',
+}
 
 // Column definitions for the forensic timeline grid
 const defaultColDefs = [
@@ -67,11 +84,18 @@ function App() {
   const [showThemePicker, setShowThemePicker] = useState(false)
   const [searchText, setSearchText] = useState('')
   const [activeSearch, setActiveSearch] = useState('')
+  const [searchMode, setSearchMode] = useState('simple')
+  const [showSearchHelp, setShowSearchHelp] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [showSaveQueryPrompt, setShowSaveQueryPrompt] = useState(false)
+  const [saveQueryName, setSaveQueryName] = useState('')
   const [showAbout, setShowAbout] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showLogging, setShowLogging] = useState(false)
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
+  const [showAddNote, setShowAddNote] = useState(false)
+  const [filterVersion, setFilterVersion] = useState(0)
   const [pageInputValue, setPageInputValue] = useState('1')
   const [bookmarkOnly, setBookmarkOnly] = useState(false)
   const [currentTheme, setCurrentTheme] = useState(() => {
@@ -103,6 +127,9 @@ function App() {
   }, [])
   const [activeFilters, setActiveFilters] = useState(null)
   const [selectedEvent, setSelectedEvent] = useState(null)
+  const [selectedEvents, setSelectedEvents] = useState([])
+  const [bulkTag, setBulkTag] = useState('')
+  const [bulkColor, setBulkColor] = useState('')
   const [detailHeight, setDetailHeight] = useState(280)
   const [version, setVersion] = useState('')
   const gridRef = useRef(null)
@@ -189,9 +216,16 @@ function App() {
 
     setLoading(true)
     setStatus('Loading events...')
+    setSearchError('')
     try {
-      const req = buildQueryRequest(page, filterState)
-      const result = await QueryEvents(req)
+      let result
+
+      if (searchMode === 'advanced' && activeSearch) {
+        result = await AdvancedSearch(activeSearch, page, PAGE_SIZE)
+      } else {
+        const req = buildQueryRequest(page, filterState)
+        result = await QueryEvents(req)
+      }
 
       if (result) {
         setEvents(result.events || [])
@@ -200,16 +234,19 @@ function App() {
 
         const filterCount = (filterState || activeFilters)?.filters?.length || 0
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
-        const searchLabel = activeSearch ? ` | Search: "${activeSearch}"` : ''
+        const searchLabel = activeSearch ? (searchMode === 'advanced' ? ' | Advanced: ' + activeSearch : ` | Search: "${activeSearch}"`) : ''
         const bookmarkLabel = bookmarkOnly ? ' | \u2605 Bookmarked only' : ''
         setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}${bookmarkLabel}`)
       }
     } catch (err) {
+      if (searchMode === 'advanced') {
+        setSearchError(String(err))
+      }
       setStatus('Error: ' + err)
     } finally {
       setLoading(false)
     }
-  }, [dbInfo, buildQueryRequest, activeFilters])
+  }, [dbInfo, buildQueryRequest, activeFilters, searchMode, activeSearch])
 
   const handleOpenDB = useCallback(async () => {
     try {
@@ -334,6 +371,7 @@ function App() {
   }, [loadPage])
 
   const handleSearch = useCallback(() => {
+    setSearchError('')
     setActiveSearch(searchText)
     setCurrentPage(1)
     setSelectedEvent(null)
@@ -342,9 +380,34 @@ function App() {
   const handleClearSearch = useCallback(() => {
     setSearchText('')
     setActiveSearch('')
+    setSearchError('')
     setCurrentPage(1)
     setSelectedEvent(null)
   }, [])
+
+  const handleToggleSearchMode = useCallback(() => {
+    const newMode = searchMode === 'simple' ? 'advanced' : 'simple'
+    setSearchMode(newMode)
+    setSearchText('')
+    setActiveSearch('')
+    setSearchError('')
+    setCurrentPage(1)
+    setSelectedEvent(null)
+  }, [searchMode])
+
+  const handleSaveAdvancedQuery = useCallback(async () => {
+    const name = saveQueryName.trim()
+    if (!name || !activeSearch) return
+    try {
+      const queryData = JSON.stringify({ advanced: true, whereClause: activeSearch })
+      await SaveQuery(name, queryData)
+      setSaveQueryName('')
+      setShowSaveQueryPrompt(false)
+      setStatus(`Query saved: ${name}`)
+    } catch (err) {
+      setStatus('Error saving query: ' + err)
+    }
+  }, [saveQueryName, activeSearch])
 
   // Reload when activeSearch changes
   useEffect(() => {
@@ -384,6 +447,24 @@ function App() {
       return col
     }))
   }, [])
+
+  const handleNoteAdded = useCallback(() => {
+    loadPage(currentPage)
+    setFilterVersion(v => v + 1)
+  }, [currentPage, loadPage])
+
+  const handleDeleteExaminerNote = useCallback(async (negatedId) => {
+    try {
+      await DeleteExaminerNote(negatedId)
+      setSelectedEvent(null)
+      loadPage(currentPage)
+      setFilterVersion(v => v + 1)
+      setStatus('Examiner note deleted')
+    } catch (err) {
+      console.error('Error deleting examiner note:', err)
+      setStatus('Error deleting note: ' + err)
+    }
+  }, [currentPage, loadPage])
 
   const handleExportCSV = useCallback(async () => {
     try {
@@ -443,6 +524,16 @@ function App() {
   }, [activeFilters, loadPage])
 
   const handleLoadSavedQuery = useCallback((filterState) => {
+    // Detect advanced query format
+    if (filterState && filterState.advanced && filterState.whereClause) {
+      setSearchMode('advanced')
+      setSearchText(filterState.whereClause)
+      setActiveSearch(filterState.whereClause)
+      setSearchError('')
+      setCurrentPage(1)
+      setSelectedEvent(null)
+      return
+    }
     setActiveFilters(filterState)
     setShowFilters(true)
     setCurrentPage(1)
@@ -452,18 +543,54 @@ function App() {
 
   const handleRowSelected = useCallback((event) => {
     const selectedRows = event.api.getSelectedRows()
-    if (selectedRows.length > 0) {
+    setSelectedEvents(selectedRows)
+    if (selectedRows.length === 1) {
       setSelectedEvent(selectedRows[0])
+    } else {
+      setSelectedEvent(null)
     }
   }, [])
 
   const handleCloseDetail = useCallback(() => {
     setSelectedEvent(null)
+    setSelectedEvents([])
     // Deselect rows in the grid
     if (gridRef.current?.api) {
       gridRef.current.api.deselectAll()
     }
   }, [])
+
+  const handleBulkApply = useCallback(async () => {
+    const color = bulkColor
+    const tag = bulkTag.trim()
+    if (!color && !tag) return
+    const ids = selectedEvents.map(e => e.id)
+    try {
+      if (color) {
+        await BulkUpdateColor(ids, color)
+      }
+      if (tag) {
+        await BulkAddTag(ids, tag)
+      }
+      setBulkTag('')
+      setBulkColor('')
+      loadPage(currentPage)
+    } catch (err) {
+      console.error('Bulk apply error:', err)
+    }
+  }, [selectedEvents, bulkColor, bulkTag, loadPage, currentPage])
+
+  const handleBulkBookmark = useCallback(async (value) => {
+    const ids = selectedEvents.map(e => e.id)
+    try {
+      await BulkSetBookmark(ids, value)
+      setEvents(prev => prev.map(e => ids.includes(e.id) ? { ...e, bookmark: value } : e))
+      setSelectedEvents(prev => prev.map(e => ({ ...e, bookmark: value })))
+      setTimeout(() => { if (gridRef.current?.api) gridRef.current.api.redrawRows() }, 0)
+    } catch (err) {
+      console.error('Bulk bookmark error:', err)
+    }
+  }, [selectedEvents])
 
   const handleEventUpdate = useCallback((id, fields) => {
     // Update the event in the local state so the grid reflects changes
@@ -647,17 +774,77 @@ function App() {
         </button>
         <div className="toolbar-separator" />
         <div className="search-bar">
+          <button
+            className={`search-mode-btn ${searchMode === 'advanced' ? 'active' : ''}`}
+            onClick={handleToggleSearchMode}
+            title={searchMode === 'simple' ? 'Switch to advanced SQL mode' : 'Switch to simple keyword mode'}
+          >
+            {searchMode === 'simple' ? 'Aa' : 'SQL'}
+          </button>
           <input
             type="text"
-            placeholder="Search events..."
+            className={searchMode === 'advanced' ? 'search-input-advanced' : ''}
+            placeholder={searchMode === 'advanced' ? "source = 'FILE' AND datetime > '2025-01-01'" : 'Search events...'}
             value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
+            onChange={(e) => { setSearchText(e.target.value); setSearchError('') }}
             onKeyDown={(e) => { if (e.key === 'Enter') handleSearch() }}
           />
           {activeSearch && (
             <button className="search-clear" onClick={handleClearSearch} title="Clear search">x</button>
           )}
           <button className="search-btn" onClick={handleSearch}>Search</button>
+          {searchMode === 'advanced' && (
+            <>
+              <button
+                className="search-help-btn"
+                onClick={() => setShowSearchHelp(prev => !prev)}
+                title="Show available fields and operators"
+              >
+                ?
+              </button>
+              {activeSearch && (
+                <button
+                  className="search-save-btn"
+                  onClick={() => setShowSaveQueryPrompt(true)}
+                  title="Save this query"
+                >
+                  Save
+                </button>
+              )}
+            </>
+          )}
+          {showSearchHelp && (
+            <div className="search-help-popup">
+              <div className="search-help-header">
+                <span>Advanced Search Help</span>
+                <button onClick={() => setShowSearchHelp(false)}>x</button>
+              </div>
+              <div className="search-help-body">
+                <p><strong>Fields:</strong> datetime, timezone, MACB, source, sourcetype, type, user, host, desc, filename, inode, notes, format, extra, reportnotes, inreport, tag, color, offset, store_number, store_index, vss_store_number, URL, record_number, event_identifier, event_type, source_name, user_sid, computer_name, bookmark</p>
+                <p><strong>Operators:</strong> =, !=, LIKE, NOT LIKE, &gt;, &lt;, &gt;=, &lt;=, AND, OR, BETWEEN</p>
+                <p><strong>PostgreSQL note:</strong> The columns <em>desc</em>, <em>user</em>, and <em>offset</em> are reserved words and will be auto-quoted when using a PostgreSQL database.</p>
+                <p><strong>Examples:</strong></p>
+                <code>source = 'EXAMINER'</code>
+                <code>desc LIKE '%malware%' AND host = 'WORKSTATION1'</code>
+                <code>datetime BETWEEN '2025-01-01' AND '2025-06-01'</code>
+              </div>
+            </div>
+          )}
+          {showSaveQueryPrompt && (
+            <div className="search-save-popup">
+              <input
+                type="text"
+                placeholder="Query name..."
+                value={saveQueryName}
+                onChange={(e) => setSaveQueryName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleSaveAdvancedQuery(); if (e.key === 'Escape') setShowSaveQueryPrompt(false) }}
+                autoFocus
+              />
+              <button onClick={handleSaveAdvancedQuery}>Save</button>
+              <button onClick={() => setShowSaveQueryPrompt(false)}>x</button>
+            </div>
+          )}
+          {searchError && <div className="search-error">{searchError}</div>}
         </div>
         <button
           className={`bookmark-filter-btn ${bookmarkOnly ? 'active' : ''}`}
@@ -665,6 +852,13 @@ function App() {
           title={bookmarkOnly ? 'Show all events' : 'Show bookmarked only'}
         >
           {bookmarkOnly ? '\u2605' : '\u2606'}
+        </button>
+        <button
+          className="add-note-btn"
+          onClick={() => setShowAddNote(true)}
+          title="Add Examiner Note"
+        >
+          +
         </button>
         <div className="toolbar-separator" />
         <button onClick={handleExportCSV}>Export CSV</button>
@@ -714,6 +908,12 @@ function App() {
         onClose={() => setShowPushPostgres(false)}
       />
 
+      <AddNoteDialog
+        visible={showAddNote}
+        onClose={() => setShowAddNote(false)}
+        onAdded={handleNoteAdded}
+      />
+
       <div className="main-content">
         <FilterPanel
           visible={showFilters}
@@ -721,6 +921,7 @@ function App() {
           onClear={handleClearFilters}
           dbInfo={dbInfo}
           activeFilters={activeFilters}
+          filterVersion={filterVersion}
         />
 
         <SavedQueries
@@ -747,7 +948,8 @@ function App() {
               defaultColDef={defaultColDef}
               context={{ activeSearch }}
               animateRows={false}
-              rowSelection="single"
+              rowSelection="multiple"
+              suppressRowClickSelection={false}
               suppressCellFocus={false}
               getRowId={(params) => String(params.data.id)}
               getRowStyle={getRowStyle}
@@ -763,18 +965,60 @@ function App() {
             />
           </div>
 
-          {selectedEvent && (
-            <div className="resize-handle" onMouseDown={handleResizeStart} />
+          {selectedEvents.length > 1 ? (
+            <div className="bulk-action-bar">
+              <span className="bulk-count">{selectedEvents.length} events selected</span>
+              <div className="bulk-actions">
+                <label className="bulk-action-label">Color:</label>
+                <div className="bulk-color-swatches">
+                  {bulkColorOptions.map(c => (
+                    <button
+                      key={c || 'none'}
+                      className={`bulk-color-swatch ${bulkColor === c ? 'selected' : ''}`}
+                      style={{
+                        background: bulkColorDisplayMap[c] || 'transparent',
+                        border: c === '' ? '1px dashed #808080' : '1px solid transparent',
+                      }}
+                      title={c || 'None'}
+                      onClick={() => setBulkColor(c)}
+                    />
+                  ))}
+                </div>
+                <span className="bulk-separator" />
+                <label className="bulk-action-label">Tag:</label>
+                <input
+                  type="text"
+                  className="bulk-tag-input"
+                  placeholder="Add tag..."
+                  value={bulkTag}
+                  onChange={(e) => setBulkTag(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleBulkApply() }}
+                />
+                <span className="bulk-separator" />
+                <button className="bulk-tag-apply" onClick={handleBulkApply} disabled={!bulkColor && !bulkTag.trim()}>Apply Changes</button>
+                <span className="bulk-separator" />
+                <button className="bulk-bookmark-btn" onClick={() => handleBulkBookmark(1)} title="Bookmark all selected">Bookmark All</button>
+                <button className="bulk-bookmark-btn" onClick={() => handleBulkBookmark(0)} title="Unbookmark all selected">Unbookmark All</button>
+                <span className="bulk-separator" />
+                <button className="bulk-clear-btn" onClick={handleCloseDetail}>Clear Selection</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {selectedEvent && (
+                <div className="resize-handle" onMouseDown={handleResizeStart} />
+              )}
+              <EventDetail
+                event={selectedEvent}
+                onUpdate={handleEventUpdate}
+                onClose={handleCloseDetail}
+                height={detailHeight}
+                searchText={activeSearch}
+                onToggleBookmark={handleBookmarkToggle}
+                onDeleteNote={handleDeleteExaminerNote}
+              />
+            </>
           )}
-
-          <EventDetail
-            event={selectedEvent}
-            onUpdate={handleEventUpdate}
-            onClose={handleCloseDetail}
-            height={detailHeight}
-            searchText={activeSearch}
-            onToggleBookmark={handleBookmarkToggle}
-          />
 
           <div className="pagination">
             <button onClick={handleFirstPage} disabled={currentPage <= 1 || loading}>

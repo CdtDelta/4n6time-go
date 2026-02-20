@@ -65,4 +65,12 @@ type Dialect interface {
 	// SQLite returns the name unchanged. PostgreSQL wraps reserved words in double quotes.
 	// This matches query.QueryDialect.QuoteColumn for structural typing.
 	QuoteColumn(name string) string
+
+	// CreateExaminerNotesTableSQL returns DDL for the examiner_notes table.
+	// Examiner notes are manually created timeline entries that appear alongside
+	// evidence events in the grid using a UNION ALL with negative IDs.
+	CreateExaminerNotesTableSQL() string
+
+	// InsertExaminerNoteSQL returns the parameterized INSERT statement for a single examiner note.
+	InsertExaminerNoteSQL() string
 }

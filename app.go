@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -243,12 +244,12 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 	importStart := time.Now()
 	a.logInfo("Import started: " + formatName + " from " + csvPath)
 
-	// Determine target store: import into connected PostgreSQL, or create new SQLite
+	// Determine target store: import into existing database or create new SQLite
 	var store database.Store
-	importIntoExisting := a.driver == "postgres" && a.store != nil
+	importIntoExisting := a.store != nil && (a.driver == "postgres" || a.driver == "sqlite")
 
 	if !importIntoExisting {
-		// Current behavior: prompt for SQLite file path
+		// No database open: prompt for new SQLite file path
 		dbPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 			Title:           "Save Database As",
 			DefaultFilename: strings.TrimSuffix(filepath.Base(csvPath), filepath.Ext(csvPath)) + ".db",
@@ -291,7 +292,7 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		})
 	}
 
-	// closeOnError closes the store only if we created a new one (not for existing PostgreSQL)
+	// closeOnError closes the store only if we created a new one (not for existing databases)
 	closeOnError := func() {
 		if !importIntoExisting {
 			store.Close()
@@ -500,6 +501,141 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		Page:       page,
 		PageSize:   pageSize,
 	}, nil
+}
+
+// AdvancedSearch executes a raw WHERE clause query with pagination.
+// Returns the same result format as QueryEvents.
+func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResponse, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("no database open")
+	}
+	if pageSize <= 0 {
+		pageSize = 1000
+	}
+	if page < 1 {
+		page = 1
+	}
+
+	// On PostgreSQL, auto-quote reserved word column names so users don't have to
+	if a.driver == "postgres" {
+		whereClause = quotePostgresReservedWords(whereClause)
+	}
+
+	rq := query.NewRaw(pageSize, whereClause)
+	rq.SetDialect(a.queryDialect())
+	rq.SetPage(page)
+	rq.OrderBy("datetime")
+
+	sqlStr, args := rq.Build()
+	countSQL, countArgs := rq.BuildCount()
+
+	totalCount, err := a.store.ExecuteCountQuery(countSQL, countArgs)
+	if err != nil {
+		a.logError("Advanced search count error: " + err.Error())
+		return nil, fmt.Errorf("count query error: %w", err)
+	}
+
+	events, err := a.store.ExecuteQuery(sqlStr, args)
+	if err != nil {
+		a.logError("Advanced search error: " + err.Error())
+		return nil, fmt.Errorf("query error: %w", err)
+	}
+
+	return &QueryResponse{
+		Events:     events,
+		TotalCount: totalCount,
+		Page:       page,
+		PageSize:   pageSize,
+	}, nil
+}
+
+// quotePostgresReservedWords replaces standalone occurrences of desc, user, and
+// offset with their double-quoted versions ("desc", "user", "offset") so that
+// PostgreSQL accepts them as column names. Only text outside single-quoted string
+// literals is processed; quoted values are left untouched.
+func quotePostgresReservedWords(where string) string {
+	// Split on single quotes. Even-indexed segments (0, 2, 4, ...) are outside
+	// string literals; odd-indexed segments are inside.
+	parts := strings.Split(where, "'")
+	re := regexp.MustCompile(`(?i)\b(desc|user|offset)\b`)
+	for i := 0; i < len(parts); i += 2 {
+		parts[i] = re.ReplaceAllStringFunc(parts[i], func(match string) string {
+			return `"` + strings.ToLower(match) + `"`
+		})
+	}
+	return strings.Join(parts, "'")
+}
+
+// splitIDs separates a slice of IDs into positive (regular event) and
+// negative (examiner note) groups. Negative IDs are negated back to positive
+// for use with the examiner_notes table.
+func splitIDs(ids []int64) (regular, examiner []int64) {
+	for _, id := range ids {
+		if id > 0 {
+			regular = append(regular, id)
+		} else if id < 0 {
+			examiner = append(examiner, -id)
+		}
+	}
+	return
+}
+
+// BulkUpdateColor applies a color to multiple events. Positive IDs update
+// log2timeline; negative IDs update examiner_notes.
+func (a *App) BulkUpdateColor(ids []int64, color string) error {
+	if a.store == nil {
+		return fmt.Errorf("no database open")
+	}
+	regular, examiner := splitIDs(ids)
+	if len(regular) > 0 {
+		if err := a.store.BulkUpdateColor(regular, color); err != nil {
+			return fmt.Errorf("bulk update color: %w", err)
+		}
+	}
+	if len(examiner) > 0 {
+		if err := a.store.BulkUpdateExaminerNoteColor(examiner, color); err != nil {
+			return fmt.Errorf("bulk update examiner note color: %w", err)
+		}
+	}
+	a.logInfo(fmt.Sprintf("Bulk color update: %d events, %d examiner notes, color=%s", len(regular), len(examiner), color))
+	return nil
+}
+
+// BulkAddTag appends a tag to multiple events. Only positive IDs (regular events)
+// are updated; examiner note tags are immutable.
+func (a *App) BulkAddTag(ids []int64, tag string) error {
+	if a.store == nil {
+		return fmt.Errorf("no database open")
+	}
+	regular, _ := splitIDs(ids)
+	if len(regular) > 0 {
+		if err := a.store.BulkAddTag(regular, tag); err != nil {
+			return fmt.Errorf("bulk add tag: %w", err)
+		}
+	}
+	a.logInfo(fmt.Sprintf("Bulk tag add: %d events, tag=%s", len(regular), tag))
+	return nil
+}
+
+// BulkSetBookmark sets the bookmark value on multiple events. Positive IDs update
+// log2timeline; negative IDs update examiner_notes.
+func (a *App) BulkSetBookmark(ids []int64, value int64) error {
+	if a.store == nil {
+		return fmt.Errorf("no database open")
+	}
+	regular, examiner := splitIDs(ids)
+	if len(regular) > 0 {
+		if err := a.store.BulkSetBookmark(regular, value); err != nil {
+			return fmt.Errorf("bulk set bookmark: %w", err)
+		}
+	}
+	if len(examiner) > 0 {
+		if err := a.store.BulkSetExaminerNoteBookmark(examiner, value); err != nil {
+			return fmt.Errorf("bulk set examiner note bookmark: %w", err)
+		}
+	}
+	a.logInfo(fmt.Sprintf("Bulk bookmark: %d events, %d examiner notes, value=%d", len(regular), len(examiner), value))
+	return nil
 }
 
 // ExportCSV exports the current filtered results to a CSV file.
@@ -722,19 +858,81 @@ func (a *App) GetTags() ([]string, error) {
 // -- Event Operations --
 
 // UpdateEventFields updates specific fields on an event.
+// Rejects negative IDs since examiner notes use a different update path.
 func (a *App) UpdateEventFields(rowid int64, fields map[string]interface{}) error {
 	if a.store == nil {
 		return fmt.Errorf("no database open")
 	}
+	if rowid < 0 {
+		return fmt.Errorf("cannot update examiner note fields via UpdateEventFields; use dedicated methods")
+	}
 	return a.store.UpdateEvent(rowid, fields)
 }
 
-// ToggleBookmark toggles the bookmark flag on an event and returns the new value.
+// ToggleBookmark toggles the bookmark flag on an event or examiner note.
+// Negative IDs are routed to the examiner notes table.
 func (a *App) ToggleBookmark(rowid int64) (int64, error) {
 	if a.store == nil {
 		return 0, fmt.Errorf("no database open")
 	}
+	if rowid < 0 {
+		return a.store.ToggleExaminerNoteBookmark(-rowid)
+	}
 	return a.store.ToggleBookmark(rowid)
+}
+
+// AddExaminerNote creates a new examiner note and returns the negated ID.
+func (a *App) AddExaminerNote(datetime, description string) (int64, error) {
+	if a.store == nil {
+		return 0, fmt.Errorf("no database open")
+	}
+	id, err := a.store.InsertExaminerNote(datetime, description, "", "")
+	if err != nil {
+		return 0, err
+	}
+	a.logInfo(fmt.Sprintf("Examiner note added (ID %d)", id))
+	return id, nil
+}
+
+// DeleteExaminerNote deletes an examiner note. The frontend passes the negated ID;
+// this method converts it to the positive internal ID.
+func (a *App) DeleteExaminerNote(negatedID int64) error {
+	if a.store == nil {
+		return fmt.Errorf("no database open")
+	}
+	if negatedID >= 0 {
+		return fmt.Errorf("expected a negative examiner note ID, got %d", negatedID)
+	}
+	err := a.store.DeleteExaminerNote(-negatedID)
+	if err != nil {
+		return err
+	}
+	a.logInfo(fmt.Sprintf("Examiner note deleted (ID %d)", negatedID))
+	return nil
+}
+
+// UpdateExaminerNoteColor updates the color of an examiner note.
+// The frontend passes the negated ID.
+func (a *App) UpdateExaminerNoteColor(negatedID int64, color string) error {
+	if a.store == nil {
+		return fmt.Errorf("no database open")
+	}
+	if negatedID >= 0 {
+		return fmt.Errorf("expected a negative examiner note ID, got %d", negatedID)
+	}
+	return a.store.UpdateExaminerNoteColor(-negatedID, color)
+}
+
+// ToggleExaminerNoteBookmark toggles the bookmark on an examiner note.
+// The frontend passes the negated ID.
+func (a *App) ToggleExaminerNoteBookmark(negatedID int64) (int64, error) {
+	if a.store == nil {
+		return 0, fmt.Errorf("no database open")
+	}
+	if negatedID >= 0 {
+		return 0, fmt.Errorf("expected a negative examiner note ID, got %d", negatedID)
+	}
+	return a.store.ToggleExaminerNoteBookmark(-negatedID)
 }
 
 // -- Saved Queries --
@@ -915,6 +1113,28 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 		"phase": "inserting", "message": fmt.Sprintf("Successfully inserted %d events into PostgreSQL", inserted), "count": inserted, "total": total,
 	})
 
+	// Copy examiner notes
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "inserting", "message": "Copying examiner notes...", "count": inserted, "total": total,
+	})
+	examNotes, err := a.store.GetExaminerNotes()
+	if err != nil {
+		// Not fatal; log and continue
+		a.logError("Failed to read examiner notes for push: " + err.Error())
+	}
+	notesInserted := 0
+	for _, note := range examNotes {
+		_, err := pgStore.InsertExaminerNote(note.Datetime, note.Desc, note.Tag, note.Color)
+		if err != nil {
+			a.logError("Failed to push examiner note: " + err.Error())
+			continue
+		}
+		notesInserted++
+	}
+	if notesInserted > 0 {
+		a.logInfo(fmt.Sprintf("Pushed %d examiner notes to PostgreSQL", notesInserted))
+	}
+
 	// Update PostgreSQL metadata
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 		"phase": "metadata", "message": "Building PostgreSQL metadata and indexes...", "count": 0, "total": 0,
@@ -927,9 +1147,13 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 		"phase": "done", "message": fmt.Sprintf("Push complete: %d events transferred to PostgreSQL", inserted), "count": inserted, "total": total,
 	})
-	a.logInfo(fmt.Sprintf("Push complete: %d events in %s", inserted, time.Since(pushStart).Round(time.Millisecond)))
+	a.logInfo(fmt.Sprintf("Push complete: %d events + %d notes in %s", inserted, notesInserted, time.Since(pushStart).Round(time.Millisecond)))
 
-	return fmt.Sprintf("Pushed %d events to PostgreSQL", inserted), nil
+	msg := fmt.Sprintf("Pushed %d events to PostgreSQL", inserted)
+	if notesInserted > 0 {
+		msg += fmt.Sprintf(" (%d examiner notes)", notesInserted)
+	}
+	return msg, nil
 }
 
 // -- Internal Helpers --

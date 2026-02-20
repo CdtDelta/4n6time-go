@@ -3,11 +3,23 @@
 import {main} from '../models';
 import {database} from '../models';
 
+export function AddExaminerNote(arg1:string,arg2:string):Promise<number>;
+
+export function AdvancedSearch(arg1:string,arg2:number,arg3:number):Promise<main.QueryResponse>;
+
+export function BulkAddTag(arg1:Array<number>,arg2:string):Promise<void>;
+
+export function BulkSetBookmark(arg1:Array<number>,arg2:number):Promise<void>;
+
+export function BulkUpdateColor(arg1:Array<number>,arg2:string):Promise<void>;
+
 export function CloseDatabase():Promise<void>;
 
 export function ConnectPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.DBInfo>;
 
 export function CreatePostgresDatabase(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<main.DBInfo>;
+
+export function DeleteExaminerNote(arg1:number):Promise<void>;
 
 export function DeleteSavedQuery(arg1:string):Promise<void>;
 
@@ -45,4 +57,8 @@ export function SetLoggingPersist(arg1:boolean):Promise<void>;
 
 export function ToggleBookmark(arg1:number):Promise<number>;
 
+export function ToggleExaminerNoteBookmark(arg1:number):Promise<number>;
+
 export function UpdateEventFields(arg1:number,arg2:Record<string, any>):Promise<void>;
+
+export function UpdateExaminerNoteColor(arg1:number,arg2:string):Promise<void>;

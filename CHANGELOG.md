@@ -2,6 +2,20 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.10.0] - 2026-02-19
+
+### Added
+
+- Examiner notes: manually add timestamped investigation notes that appear in the main timeline grid alongside evidence events. Notes use source "EXAMINER", support color coding and bookmarking, and are immutable after creation (delete and re-enter to change). Stored in a separate examiner_notes table with negative IDs to distinguish from evidence events.
+- Advanced search mode: toggle between simple keyword search and SQL WHERE clause mode. Supports full SQL syntax with field names, operators, AND/OR logic. Includes a help popup showing available fields and operators. Advanced queries can be saved and loaded from the saved queries panel.
+- Bulk select and edit: shift-click or ctrl-click to select multiple grid rows. Apply color, tags, or bookmark status to all selected events at once. Examiner note tags are protected from bulk tag changes.
+- Multi-import into existing SQLite databases: importing a timeline file when a SQLite database is already open appends to the existing database instead of creating a new one. Enables combining multiple evidence sources into a single investigation database.
+- PostgreSQL reserved word auto-quoting in advanced search (desc, user, offset)
+
+### Fixed
+
+- Examiner notes no longer appear in advanced search results when filtering by a specific non-EXAMINER source value
+
 ## [0.9.0] - 2026-02-16
 
 ### Added

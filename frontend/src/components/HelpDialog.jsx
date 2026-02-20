@@ -54,6 +54,29 @@ Search works alongside filters. If you have active filters and perform a search,
 To clear the search, click the "x" button next to the search input.`
   },
   {
+    id: 'advanced-search',
+    title: 'Advanced Search',
+    content: `Advanced search mode lets you write SQL WHERE clauses directly for precise queries. Toggle between simple keyword search and SQL mode using the Aa/SQL button next to the search bar.
+
+Toggling modes: Click the Aa/SQL button to switch. In simple mode (Aa), the search bar performs keyword matching across multiple fields. In SQL mode (SQL), the search bar accepts a raw WHERE clause.
+
+SQL syntax: Write any valid SQL WHERE clause using the field names from the database. Examples:
+
+source = 'FILE'
+desc LIKE '%malware%' AND host = 'WORKSTATION1'
+datetime BETWEEN '2025-01-01' AND '2025-06-01'
+source = 'WEBHIST' OR source = 'OLECF'
+tag LIKE '%important%'
+
+Field reference: Click the ? button next to the search bar to see all 30 available field names and supported operators (=, !=, LIKE, NOT LIKE, >, <, >=, <=, AND, OR, BETWEEN, IN).
+
+PostgreSQL note: When connected to a PostgreSQL database, the columns desc, user, and offset are SQL reserved words. These are automatically double-quoted before execution, so you can use them as-is in your queries.
+
+Saving advanced queries: Click the Save button (floppy disk icon) to save the current SQL query with a name. Saved advanced queries appear in the Saved Queries panel with a "SQL:" prefix. Loading a saved advanced query automatically switches to SQL mode.
+
+Advanced search works alongside the bookmark-only filter. If both are active, only bookmarked events matching the WHERE clause are returned.`
+  },
+  {
     id: 'bookmarks',
     title: 'Bookmarks',
     content: `Bookmark events to flag them for later review. Bookmarks are stored in the database and persist between sessions.
@@ -107,6 +130,57 @@ The detail panel shows all fields for the selected event, including fields not v
 Notes and Report: Each event has Notes and Report Notes fields you can edit. You can also mark events as "In Report" and assign a color tag for visual highlighting. Click Save after making changes.
 
 Color-tagged events appear with a colored left border and subtle background tint in the grid for easy identification.`
+  },
+  {
+    id: 'examiner-notes',
+    title: 'Examiner Notes',
+    content: `Examiner notes let you add your own timestamped investigation notes directly into the timeline grid alongside evidence events.
+
+Adding a note: Click the + button in the toolbar to open the Add Note dialog. Enter a date and time for the note (click "Now" to use the current time), a description, and an optional tag. The tag "examiner_entry" is always included automatically. Click Add Note to create it.
+
+How notes appear: Examiner notes appear in the main event grid with source "EXAMINER" and source type "Examiner Note". They are interleaved with evidence events by datetime, so they appear in chronological context. Notes use negative IDs internally to distinguish them from evidence events.
+
+Editing notes: Examiner notes are immutable after creation. You can change the color and toggle the bookmark, but you cannot edit the description, tag, or datetime. To correct a note, delete it and create a new one.
+
+Deleting notes: Select an examiner note in the grid to open it in the detail panel. The detail panel shows a "Delete Note" button for examiner notes. Click it to permanently remove the note.
+
+Color coding and bookmarks: You can assign a color to an examiner note using the color picker in the detail panel, and toggle its bookmark star. Colors and bookmarks work the same as for evidence events.
+
+Filtering: Use the source filter with value "EXAMINER" to show only examiner notes, or use advanced search with source = 'EXAMINER'. When filtering by a different source (e.g., source = 'FILE'), examiner notes are automatically excluded from results.`
+  },
+  {
+    id: 'bulk-editing',
+    title: 'Bulk Editing',
+    content: `Bulk editing lets you apply changes to multiple events at once.
+
+Selecting multiple rows: Hold Shift and click to select a range of rows. Hold Ctrl (Cmd on macOS) and click to toggle individual rows. Selected rows are highlighted in the grid.
+
+Bulk action bar: When more than one row is selected, the detail panel is replaced by a bulk action bar. The bar shows the number of selected events and provides these controls:
+
+Color swatches: Click a color swatch to stage that color for application. The selected swatch shows a blue outline. Click the "None" swatch (dashed border) to stage clearing the color.
+
+Tag input: Type a tag name to stage it for application. Tags are appended to existing tags on each event, avoiding duplicates.
+
+Apply Changes: Click this button to apply the staged color and/or tag to all selected events. The button is disabled until you select a color or enter a tag. Both can be applied in a single action.
+
+Bookmark All / Unbookmark All: Set or clear the bookmark flag on all selected events immediately (no need to click Apply Changes).
+
+Clear Selection: Deselects all rows and returns to the normal detail panel view.
+
+Examiner note protection: When bulk editing a mixed selection of evidence events and examiner notes, tag changes only apply to evidence events. Examiner note tags are immutable and are skipped during bulk tag operations. Color and bookmark changes apply to both.`
+  },
+  {
+    id: 'multi-import',
+    title: 'Multi-Import',
+    content: `When a database is already open, importing a timeline file adds the new data to the existing database instead of creating a new one.
+
+How it works: If you have a SQLite database open and click Import (or File > Import Timeline), the file chooser opens directly without prompting for a new database location. The imported events are added to the existing database alongside any events already there. The grid refreshes to show the combined data.
+
+Use case: This is useful for building a single investigation database from multiple evidence sources. For example, you might import a filesystem timeline first, then import a browser history timeline, then a Windows event log timeline, all into the same database. Each import adds to the existing data.
+
+PostgreSQL: The same behavior applies when connected to a PostgreSQL database. Importing always writes directly to the connected server.
+
+Note: There is no undo for an import. If you import the wrong file, you would need to start with a fresh database. Consider keeping backups of your database file before importing additional sources.`
   },
   {
     id: 'export',

@@ -115,17 +115,22 @@ function SavedQueries({ visible, onLoad, currentFilters, dbInfo }) {
           let summary = ''
           try {
             const parsed = JSON.parse(q.Query)
-            const parts = []
-            if (parsed.filters && parsed.filters.length > 0) {
-              parts.push(`${parsed.filters.length} filter${parsed.filters.length > 1 ? 's' : ''}`)
+            if (parsed.advanced && parsed.whereClause) {
+              const clause = parsed.whereClause
+              summary = 'SQL: ' + (clause.length > 40 ? clause.substring(0, 40) + '...' : clause)
+            } else {
+              const parts = []
+              if (parsed.filters && parsed.filters.length > 0) {
+                parts.push(`${parsed.filters.length} filter${parsed.filters.length > 1 ? 's' : ''}`)
+              }
+              if (parsed.dateFrom && parsed.dateTo) {
+                parts.push('date range')
+              }
+              if (parsed.logic === 'OR') {
+                parts.push('OR logic')
+              }
+              summary = parts.join(', ') || 'no filters'
             }
-            if (parsed.dateFrom && parsed.dateTo) {
-              parts.push('date range')
-            }
-            if (parsed.logic === 'OR') {
-              parts.push('OR logic')
-            }
-            summary = parts.join(', ') || 'no filters'
           } catch {
             summary = 'raw query'
           }

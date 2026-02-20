@@ -10,6 +10,10 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 - Import L2T CSV, Plaso JSONL, TLN, L2TTLN, and dynamic CSV files (tested with 2GB+ files, millions of events)
 - **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
+- **Examiner notes**: add timestamped investigation notes directly into the timeline grid alongside evidence events
+- **Advanced search**: toggle between keyword search and SQL WHERE clause mode with full query syntax
+- **Bulk select and edit**: shift-click or ctrl-click to select multiple rows, then apply color, tags, or bookmarks to all at once
+- **Multi-import**: import additional timeline files into an already-open database to combine evidence sources
 - Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
 - Filter panel with AND/OR logic, date range, and multi-field filters
@@ -29,15 +33,29 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ## Screenshots
 
-![Welcome Screen](screenshots/welcome.png)
-
 ![Main View](screenshots/main-view.png)
 
-![Filters](screenshots/filters.png)
+![Filter Panel](screenshots/filter-panel.png)
 
 ![Event Detail](screenshots/event-detail.png)
 
-![Theme Picker](screenshots/theme-picker.png)
+![Timeline Histogram](screenshots/timeline-histogram.png)
+
+![Advanced Search](screenshots/advanced-search.png)
+
+![Examiner Note](screenshots/examiner-note.png)
+
+![Add Note Dialog](screenshots/add-note-dialog.png)
+
+![Bulk Select](screenshots/bulk-select.png)
+
+![PostgreSQL Connect](screenshots/postgres-connect.png)
+
+![Pagination](screenshots/pagination.png)
+
+![Logging Dialog](screenshots/logging-dialog.png)
+
+![Themes](screenshots/themes.png)
 
 ## Tech Stack
 
@@ -88,6 +106,30 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 7. Use **Columns** to show or hide fields in the grid
 8. Use **Export CSV** to save filtered results
 9. Change the UI theme via **View > Theme** (Ctrl+T)
+
+### Examiner Notes
+
+Add timestamped investigation notes directly into the timeline alongside evidence events. Click the **+** button in the toolbar to open the Add Note dialog. Enter a date/time (or click "Now"), a description, and an optional tag. Notes appear in the grid with source "EXAMINER" and can be color-coded and bookmarked. Notes are immutable after creation; to change one, delete it from the detail panel and re-enter it.
+
+### Advanced Search
+
+Toggle between simple keyword search and SQL WHERE clause mode using the **Aa/SQL** button next to the search bar. In SQL mode, enter any valid WHERE clause using field names and SQL operators:
+
+```
+source = 'FILE'
+desc LIKE '%malware%' AND host = 'WORKSTATION1'
+datetime BETWEEN '2025-01-01' AND '2025-06-01'
+```
+
+Click the **?** button to see all available field names and operators. Advanced queries can be saved and loaded from the Saved Queries panel. On PostgreSQL, the reserved words `desc`, `user`, and `offset` are auto-quoted.
+
+### Bulk Editing
+
+Select multiple rows using shift-click (range) or ctrl/cmd-click (individual toggle). When multiple rows are selected, a bulk action bar appears with color swatches, a tag input, bookmark buttons, and an "Apply Changes" button. Select a color and/or enter a tag, then click Apply Changes to update all selected events at once. Examiner note tags are protected from bulk tag changes.
+
+### Multi-Import
+
+When a SQLite or PostgreSQL database is already open, importing a timeline file appends the data to the existing database instead of creating a new one. This lets you combine multiple evidence sources (e.g., multiple hard drive images) into a single investigation database.
 
 ### PostgreSQL Support
 

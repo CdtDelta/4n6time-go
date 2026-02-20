@@ -82,3 +82,19 @@ func (d *SQLiteDialect) InsertEventSQL() string {
 		event_identifier, event_type, source_name, user_sid, computer_name, bookmark
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 }
+
+func (d *SQLiteDialect) CreateExaminerNotesTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS examiner_notes (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		datetime DATETIME,
+		description TEXT,
+		tag TEXT DEFAULT '',
+		color TEXT DEFAULT '',
+		bookmark INT DEFAULT 0,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	)`
+}
+
+func (d *SQLiteDialect) InsertExaminerNoteSQL() string {
+	return `INSERT INTO examiner_notes (datetime, description, tag, color, bookmark) VALUES (?, ?, ?, ?, ?)`
+}

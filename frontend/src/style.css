@@ -165,23 +165,23 @@ html, body, #root {
   position: relative;
 }
 
-.search-bar input {
+.search-bar > input {
   padding: 5px 8px;
   background: var(--bg-input);
   border: 1px solid var(--border-primary);
-  border-radius: 3px;
+  border-radius: 0 3px 3px 0;
   color: var(--text-primary);
   font-size: 12px;
   width: 200px;
   color-scheme: var(--color-scheme, dark);
 }
 
-.search-bar input:focus {
+.search-bar > input:focus {
   outline: none;
   border-color: var(--border-accent);
 }
 
-.search-bar input::placeholder {
+.search-bar > input::placeholder {
   color: var(--text-dim);
 }
 
@@ -201,6 +201,207 @@ html, body, #root {
 
 .search-clear:hover {
   color: var(--color-danger-text) !important;
+}
+
+/* Search mode toggle */
+.search-mode-btn {
+  padding: 4px 8px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  font-family: monospace !important;
+  background: var(--bg-input) !important;
+  border: 1px solid var(--border-primary) !important;
+  border-radius: 3px 0 0 3px !important;
+  color: var(--text-muted) !important;
+  cursor: pointer;
+  min-width: 32px;
+  text-align: center;
+}
+
+.search-mode-btn:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--border-accent) !important;
+}
+
+.search-mode-btn.active {
+  background: var(--bg-accent-active) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-accent-bright) !important;
+}
+
+/* Advanced search input (wider) */
+.search-input-advanced {
+  width: 360px !important;
+  font-family: monospace !important;
+  font-size: 11px !important;
+  border-radius: 0 3px 3px 0 !important;
+}
+
+/* Search help button */
+.search-help-btn {
+  padding: 4px 7px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  background: transparent !important;
+  border: 1px solid var(--border-primary) !important;
+  border-radius: 50% !important;
+  color: var(--text-muted) !important;
+  cursor: pointer;
+  min-width: 22px;
+  min-height: 22px;
+  text-align: center;
+  line-height: 1;
+}
+
+.search-help-btn:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--border-accent) !important;
+}
+
+/* Search save button */
+.search-save-btn {
+  padding: 4px 8px !important;
+  font-size: 10px !important;
+  background: transparent !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-muted) !important;
+  cursor: pointer;
+  border-radius: 3px !important;
+}
+
+.search-save-btn:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--border-accent) !important;
+  background: var(--bg-accent) !important;
+}
+
+/* Search help popup */
+.search-help-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 6px;
+  width: 420px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  z-index: 800;
+}
+
+.search-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-primary);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.search-help-header button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+
+.search-help-header button:hover {
+  color: var(--text-primary);
+}
+
+.search-help-body {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.search-help-body p {
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.search-help-body strong {
+  color: var(--text-primary);
+}
+
+.search-help-body code {
+  display: block;
+  padding: 3px 8px;
+  margin: 3px 0;
+  background: var(--bg-input);
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+/* Search save popup */
+.search-save-popup {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 800;
+}
+
+.search-save-popup input[type="text"] {
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+  width: 140px;
+}
+
+.search-save-popup input[type="text"]:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.search-save-popup button {
+  padding: 4px 8px;
+  background: var(--bg-accent);
+  border: 1px solid var(--border-accent);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.search-save-popup button:hover {
+  background: var(--bg-accent-hover);
+}
+
+/* Search error display */
+.search-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  padding: 4px 10px;
+  background: rgba(231, 76, 60, 0.1);
+  border: 1px solid rgba(231, 76, 60, 0.3);
+  border-radius: 4px;
+  color: #e74c3c;
+  font-size: 11px;
+  max-width: 500px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 800;
 }
 
 /* Search keyword highlighting */
@@ -1536,4 +1737,263 @@ html, body, #root {
   line-height: 1.6;
   color: var(--text-secondary);
   margin: 0 0 12px;
+}
+
+/* ========================================
+   Add Examiner Note Dialog
+   ======================================== */
+
+.add-note-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 8px;
+  width: 400px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.add-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+}
+
+.add-note-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--text-primary);
+}
+
+.add-note-content {
+  padding: 8px 20px 20px;
+}
+
+.add-note-field {
+  margin-bottom: 10px;
+}
+
+.add-note-field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.add-note-field input,
+.add-note-field textarea {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.add-note-field input:focus,
+.add-note-field textarea:focus {
+  outline: none;
+  border-color: var(--border-accent);
+}
+
+.add-note-error {
+  color: #e74c3c;
+  font-size: 12px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: rgba(231, 76, 60, 0.1);
+  border-radius: 4px;
+}
+
+.add-note-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.add-note-actions button {
+  flex: 1;
+  padding: 8px 12px;
+  background: var(--bg-accent);
+  color: var(--text-primary);
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s;
+}
+
+.add-note-actions button:hover:not(:disabled) {
+  background: var(--bg-accent-hover);
+}
+
+.add-note-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.add-note-actions .add-note-cancel {
+  background: transparent;
+  border-color: var(--border-primary);
+  color: var(--text-secondary);
+}
+
+.add-note-actions .add-note-cancel:hover:not(:disabled) {
+  background: var(--bg-accent);
+  color: var(--text-primary);
+}
+
+/* Add Note toolbar button */
+.add-note-btn {
+  background: transparent !important;
+  border: 1px solid var(--border-primary) !important;
+  color: var(--text-muted) !important;
+  font-size: 16px !important;
+  cursor: pointer;
+  padding: 2px 8px !important;
+  border-radius: 3px;
+  line-height: 1;
+  font-weight: 600;
+}
+
+.add-note-btn:hover {
+  color: var(--text-primary) !important;
+  border-color: var(--border-accent) !important;
+}
+
+/* Delete button in detail panel for examiner notes */
+.detail-delete-note {
+  margin-left: 8px;
+  padding: 2px 10px;
+  background: transparent;
+  border: 1px solid var(--color-danger-border, #e74c3c);
+  border-radius: 3px;
+  color: var(--color-danger-text, #e74c3c);
+  cursor: pointer;
+  font-size: 11px;
+  transition: background 0.15s;
+}
+
+.detail-delete-note:hover {
+  background: var(--color-danger-bg, rgba(231, 76, 60, 0.15));
+}
+
+/* Bulk Action Bar */
+.bulk-action-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--color-bulk-bg, rgba(52, 152, 219, 0.15));
+  border-top: 2px solid var(--color-bulk-border, rgba(52, 152, 219, 0.5));
+  flex-wrap: wrap;
+  min-height: 48px;
+}
+
+.bulk-count {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  color: var(--color-bulk-text, #3498db);
+}
+
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bulk-action-label {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.bulk-color-swatches {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.bulk-color-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+  outline: none;
+}
+
+.bulk-color-swatch:hover {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 1px;
+}
+
+.bulk-color-swatch.selected {
+  outline: 2px solid #3498db;
+  outline-offset: 1px;
+}
+
+.bulk-separator {
+  width: 1px;
+  height: 24px;
+  background: var(--color-border, #555);
+  opacity: 0.5;
+}
+
+.bulk-tag-input {
+  width: 140px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--color-border, #555);
+  border-radius: 3px;
+  background: var(--color-input-bg, rgba(0, 0, 0, 0.2));
+  color: inherit;
+}
+
+.bulk-tag-apply {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border, #555);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.bulk-tag-apply:hover {
+  background: var(--color-hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+.bulk-bookmark-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border, #555);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+
+.bulk-bookmark-btn:hover {
+  background: var(--color-hover-bg, rgba(255, 255, 255, 0.08));
+}
+
+.bulk-clear-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-danger-border, rgba(231, 76, 60, 0.5));
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-danger-text, #e74c3c);
+}
+
+.bulk-clear-btn:hover {
+  background: var(--color-danger-bg, rgba(231, 76, 60, 0.15));
 }

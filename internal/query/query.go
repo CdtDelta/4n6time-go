@@ -418,6 +418,16 @@ func (rq *RawQuery) Build() (string, []interface{}) {
 	return sql, nil
 }
 
+// BuildCount generates a COUNT query using the raw WHERE clause.
+func (rq *RawQuery) BuildCount() (string, []interface{}) {
+	idCol := rq.dialect.IDColumn()
+	sql := "SELECT COUNT(" + idCol + ") FROM log2timeline"
+	if rq.rawWhere != "" {
+		sql += " WHERE " + rq.rawWhere
+	}
+	return sql, nil
+}
+
 // isValidField checks a field name against the known columns.
 func isValidField(name string) bool {
 	for _, f := range model.Fields {

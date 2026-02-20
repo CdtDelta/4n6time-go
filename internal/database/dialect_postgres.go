@@ -110,3 +110,19 @@ func (d *PostgresDialect) InsertEventSQL() string {
 		event_identifier, event_type, source_name, user_sid, computer_name, bookmark
 	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)`
 }
+
+func (d *PostgresDialect) CreateExaminerNotesTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS examiner_notes (
+		id SERIAL PRIMARY KEY,
+		datetime TIMESTAMP,
+		description TEXT,
+		tag TEXT DEFAULT '',
+		color TEXT DEFAULT '',
+		bookmark INT DEFAULT 0,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	)`
+}
+
+func (d *PostgresDialect) InsertExaminerNoteSQL() string {
+	return `INSERT INTO examiner_notes (datetime, description, tag, color, bookmark) VALUES ($1, $2, $3, $4, $5) RETURNING id`
+}
