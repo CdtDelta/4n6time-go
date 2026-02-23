@@ -51,15 +51,20 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
       if (!cancelled) {
         setDistinctValues(values)
 
-        // Load date range
-        try {
-          const dates = await GetMinMaxDate()
-          if (dates && dates.length === 2) {
-            if (!dateFrom) setDateFrom(dates[0])
-            if (!dateTo) setDateTo(dates[1])
+        // Load date range defaults only if no external date range is active
+        // (e.g. from a histogram selection that triggered the panel to open)
+        if (!activeFilters?.dateFrom && !activeFilters?.dateTo) {
+          try {
+            const dates = await GetMinMaxDate()
+            if (dates && dates.length === 2) {
+              if (!cancelled) {
+                setDateFrom(prev => prev || dates[0])
+                setDateTo(prev => prev || dates[1])
+              }
+            }
+          } catch (err) {
+            console.error('Error loading date range:', err)
           }
-        } catch (err) {
-          console.error('Error loading date range:', err)
         }
 
         setLoading(false)
@@ -68,7 +73,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
 
     loadValues()
     return () => { cancelled = true }
-  }, [visible, dbInfo, filterVersion])
+  }, [visible, dbInfo, filterVersion, activeFilters])
 
   const addFilter = useCallback(() => {
     setFilters(prev => [...prev, { field: 'source', operator: '=', value: '' }])

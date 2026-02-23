@@ -2,6 +2,13 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.10.1] - 2026-02-22
+
+### Fixed
+
+- Timeline histogram drag selection not updating the date range filter on the first use
+- PostgreSQL error when using histogram drag selection due to partial date format (e.g., "2025-02") not being expanded to a full timestamp
+
 ## [0.10.0] - 2026-02-19
 
 ### Added

@@ -439,7 +439,12 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		default:
 			continue
 		}
-		p := query.Simple(f.Field, op, f.Value)
+		// Normalize partial dates for datetime fields
+		val := f.Value
+		if f.Field == "datetime" {
+			val = normalizeDate(val, op == query.LessOrEqual)
+		}
+		p := query.Simple(f.Field, op, val)
 		q.AddPredicate(p)
 	}
 
@@ -685,7 +690,12 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 		default:
 			continue
 		}
-		q.AddPredicate(query.Simple(f.Field, op, f.Value))
+		// Normalize partial dates for datetime fields
+		val := f.Value
+		if f.Field == "datetime" {
+			val = normalizeDate(val, op == query.LessOrEqual)
+		}
+		q.AddPredicate(query.Simple(f.Field, op, val))
 	}
 
 	// Full-text search across key columns
@@ -789,9 +799,14 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	for _, f := range req.Filters {
 		switch f.Operator {
 		case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
+			// Normalize partial dates for datetime fields
+			val := f.Value
+			if f.Field == "datetime" {
+				val = normalizeDate(val, f.Operator == "<=")
+			}
 			whereParts = append(whereParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
 			paramIdx++
-			whereArgs = append(whereArgs, f.Value)
+			whereArgs = append(whereArgs, val)
 		}
 	}
 
@@ -1169,6 +1184,56 @@ func (a *App) queryDialect() query.QueryDialect {
 		return &database.PostgresDialect{}
 	}
 	return query.DefaultDialect
+}
+
+// normalizeDate expands partial date strings to full timestamps suitable for
+// SQL queries on both SQLite and PostgreSQL. When isEnd is false, the date is
+// expanded to the start of the period; when true, to the end of the period.
+// Full timestamps (containing a space, i.e. "YYYY-MM-DD HH:MM:SS") pass through unchanged.
+func normalizeDate(value string, isEnd bool) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value
+	}
+
+	// Already a full timestamp (contains date and time separated by space)
+	if strings.Contains(value, " ") {
+		return value
+	}
+
+	// Year only: "2025"
+	if matched, _ := regexp.MatchString(`^\d{4}$`, value); matched {
+		if isEnd {
+			return value + "-12-31 23:59:59"
+		}
+		return value + "-01-01 00:00:00"
+	}
+
+	// Year-month: "2025-02"
+	if matched, _ := regexp.MatchString(`^\d{4}-\d{2}$`, value); matched {
+		if isEnd {
+			// Parse year and month to find last day
+			t, err := time.Parse("2006-01", value)
+			if err != nil {
+				return value
+			}
+			// Go to first of next month, subtract one day
+			lastDay := t.AddDate(0, 1, -1)
+			return lastDay.Format("2006-01-02") + " 23:59:59"
+		}
+		return value + "-01 00:00:00"
+	}
+
+	// Date only: "2025-02-15"
+	if matched, _ := regexp.MatchString(`^\d{4}-\d{2}-\d{2}$`, value); matched {
+		if isEnd {
+			return value + " 23:59:59"
+		}
+		return value + " 00:00:00"
+	}
+
+	// Unrecognized format, return as-is
+	return value
 }
 
 // DBInfo contains summary info about the loaded database.
