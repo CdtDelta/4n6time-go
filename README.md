@@ -67,7 +67,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.26+
 - Node.js 22 LTS
 - Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
 - Linux: `libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config`
