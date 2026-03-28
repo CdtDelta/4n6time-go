@@ -2,6 +2,15 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.10.2] - 2026-03-27
+
+### Changed
+
+- Updated Go from 1.25 to 1.26
+- Updated all Go dependencies (modernc.org/sqlite 1.37.0 to 1.48.0, Wails 2.11.0 to 2.12.0, pgx 5.8.0 to 5.9.1, golang.org/x/crypto 0.33.0 to 0.49.0)
+- Updated GitHub Actions workflow (checkout v6, setup-go v6, setup-node v6, upload-artifact v6, download-artifact v8)
+- Updated frontend npm dependencies
+
 ## [0.10.1] - 2026-02-22
 
 ### Fixed
