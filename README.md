@@ -8,7 +8,9 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ## Features
 
-- Import L2T CSV, Plaso JSONL, TLN, L2TTLN, and dynamic CSV files (tested with 2GB+ files, millions of events)
+- Import L2T CSV, Plaso JSONL, TLN, L2TTLN, dynamic CSV, and **EZ Tools CSV** files (tested with 2GB+ files, millions of events)
+- **EZ Tools CSV import**: auto-detect and import output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd) with multi-timestamp expansion
+- **Import EZ Tools Folder**: batch import all CSVs from a tool output directory
 - **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
 - **Examiner notes**: add timestamped investigation notes directly into the timeline grid alongside evidence events
 - **Advanced search**: toggle between keyword search and SQL WHERE clause mode with full query syntax
@@ -98,7 +100,7 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 ## Usage
 
 1. Launch the application
-2. Click **Import** to import a timeline file (L2T CSV, JSONL, TLN, L2TTLN, or dynamic CSV), or **Open** to load an existing database
+2. Click **Import Timeline** to import a timeline file (L2T CSV, JSONL, TLN, L2TTLN, dynamic CSV, or EZ Tools CSV), or **Open** to load an existing database
 3. Use the **Filters** panel to narrow results by source, host, type, user, or date range
 4. Click **Timeline** to visualize event distribution over time
 5. Click any row to view full event details and add tags/notes/colors
@@ -130,6 +132,16 @@ Select multiple rows using shift-click (range) or ctrl/cmd-click (individual tog
 ### Multi-Import
 
 When a SQLite or PostgreSQL database is already open, importing a timeline file appends the data to the existing database instead of creating a new one. This lets you combine multiple evidence sources (e.g., multiple hard drive images) into a single investigation database.
+
+### EZ Tools Import
+
+4n6time can import CSV output from Eric Zimmerman's forensic artifact parsers, auto-detecting the tool from column headers and expanding multiple timestamp columns into individual timeline events with appropriate MACB notation.
+
+**Single file:** Use the **Import Timeline** button or File > Import Timeline. EZ Tool CSVs are auto-detected alongside other supported formats.
+
+**Directory:** Use the **Import EZ Tools Folder** button on the welcome screen or File > Import EZ Tools Folder to batch import all CSV files from a tool output directory.
+
+Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive, 6 sub-types), SrumECmd (SRUM database, 6 sub-types), MFTECmd (NTFS MFT), SBECmd (ShellBags).
 
 ### PostgreSQL Support
 

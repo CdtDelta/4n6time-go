@@ -14,6 +14,7 @@ import (
 	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/cdtdelta/4n6time/internal/dynamicparser"
+	"github.com/cdtdelta/4n6time/internal/eztoolparser"
 	"github.com/cdtdelta/4n6time/internal/jsonlparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/query"
@@ -228,16 +229,18 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		}
 		formatName = "TLN"
 	} else {
-		// Try L2T CSV first (fixed 17-column format)
-		if err := csvparser.ValidateHeader(csvPath); err == nil {
-			formatName = "CSV"
-		} else if tlnErr := tlnparser.ValidateFile(csvPath); tlnErr == nil {
+		// Try formats in order of specificity
+		if tlnErr := tlnparser.ValidateFile(csvPath); tlnErr == nil {
 			// Could be TLN with .txt or .csv extension
 			formatName = "TLN"
+		} else if ezErr := eztoolparser.ValidateFile(csvPath); ezErr == nil {
+			formatName = "EZ Tools CSV"
+		} else if err := csvparser.ValidateHeader(csvPath); err == nil {
+			formatName = "CSV"
 		} else if dynErr := dynamicparser.ValidateFile(csvPath); dynErr == nil {
 			formatName = "Dynamic CSV"
 		} else {
-			return nil, fmt.Errorf("unrecognized file format: not a valid L2T CSV, JSONL, TLN, or dynamic CSV file")
+			return nil, fmt.Errorf("unrecognized file format: not a valid L2T CSV, JSONL, TLN, EZ Tools CSV, or dynamic CSV file")
 		}
 	}
 
@@ -316,6 +319,17 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		}
 		events = result.Events
 
+	case "EZ Tools CSV":
+		result, err := eztoolparser.ReadEvents(csvPath, progressCallback)
+		if err != nil {
+			closeOnError()
+			return nil, fmt.Errorf("reading EZ Tools CSV: %w", err)
+		}
+		events = result.Events
+		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			"phase": "reading", "message": fmt.Sprintf("Importing %s data...", result.Tool), "count": result.Count, "total": 0,
+		})
+
 	case "Dynamic CSV":
 		result, err := dynamicparser.ReadEvents(csvPath, progressCallback)
 		if err != nil {
@@ -370,6 +384,119 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		"phase": "done", "message": fmt.Sprintf("Import complete: %d events", total), "count": total, "total": total,
 	})
 	a.logInfo(fmt.Sprintf("Import complete: %d %s events in %s", total, formatName, time.Since(importStart).Round(time.Millisecond)))
+
+	return a.getDBInfo()
+}
+
+// ImportEZToolsDirectory opens a directory chooser and imports all EZ Tools
+// CSV files found within it. If no database is open, prompts for a new SQLite
+// file first.
+func (a *App) ImportEZToolsDirectory() (*DBInfo, error) {
+	dirPath, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select EZ Tools Output Folder",
+	})
+	if err != nil {
+		return nil, err
+	}
+	if dirPath == "" {
+		return nil, nil // user cancelled
+	}
+
+	importStart := time.Now()
+	a.logInfo("EZ Tools directory import started: " + dirPath)
+
+	// Determine target store
+	var store database.Store
+	importIntoExisting := a.store != nil && (a.driver == "postgres" || a.driver == "sqlite")
+
+	if !importIntoExisting {
+		dbPath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+			Title:           "Save Database As",
+			DefaultFilename: filepath.Base(dirPath) + ".db",
+			Filters: []runtime.FileFilter{
+				{DisplayName: "SQLite Database (*.db)", Pattern: "*.db"},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if dbPath == "" {
+			return nil, nil
+		}
+
+		if a.store != nil {
+			a.store.Close()
+			a.store = nil
+		}
+
+		store, err = database.CreateStore("sqlite", dbPath, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating database: %w", err)
+		}
+	} else {
+		store = a.store
+	}
+
+	closeOnError := func() {
+		if !importIntoExisting {
+			store.Close()
+		}
+	}
+
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "reading", "message": "Scanning EZ Tools folder...", "count": 0, "total": 0,
+	})
+
+	progressCallback := func(count int) {
+		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+		})
+	}
+
+	result, err := eztoolparser.ReadDirectory(dirPath, progressCallback)
+	if err != nil {
+		closeOnError()
+		return nil, fmt.Errorf("reading EZ Tools directory: %w", err)
+	}
+
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "reading", "message": fmt.Sprintf("Importing %s data: %d events...", result.Tool, result.Count), "count": result.Count, "total": 0,
+	})
+
+	events := result.Events
+	total := len(events)
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
+	})
+
+	_, err = store.InsertEvents(events, func(count int) {
+		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
+		})
+	})
+	if err != nil {
+		closeOnError()
+		return nil, fmt.Errorf("inserting events: %w", err)
+	}
+
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "metadata", "message": "Building metadata and indexes...", "count": 0, "total": 0,
+	})
+	if err := store.UpdateMetadata(); err != nil {
+		closeOnError()
+		return nil, fmt.Errorf("updating metadata: %w", err)
+	}
+	a.logInfo("Metadata update complete")
+
+	if !importIntoExisting {
+		a.store = store
+		a.driver = "sqlite"
+	}
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase": "done", "message": fmt.Sprintf("Import complete: %d events", total), "count": total, "total": total,
+	})
+	a.logInfo(fmt.Sprintf("EZ Tools directory import complete: %d events (%s tool) from %s in %s",
+		total, result.Tool, dirPath, time.Since(importStart).Round(time.Millisecond)))
 
 	return a.getDBInfo()
 }

@@ -2,6 +2,24 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.11.1] - 2026-04-27
+
+### Fixed
+
+- macOS release archive now preserves the .app bundle structure (previously extracted to just Contents/ without the .app wrapper)
+- macOS release binary now has the executable bit set (previously lost during GitHub Actions artifact transfer)
+
+## [0.11.0] - 2026-03-29
+
+### Added
+
+- EZ Tools CSV import: auto-detect and import CSV output from Eric Zimmerman's forensic tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd)
+- Multi-timestamp expansion: each timestamp column in an EZ Tool CSV becomes a separate timeline event with appropriate MACB notation
+- Import EZ Tools Folder: batch import all CSV files from a tool output directory via welcome screen button or File menu
+- Single EZ Tool CSV files are auto-detected when using the normal Import Timeline function
+- Support for 19 EZ Tool CSV subtypes including 6 AmcacheParser variants and 6 SrumECmd variants
+- In-app help documentation for EZ Tools import
+
 ## [0.10.2] - 2026-03-27
 
 ### Changed

@@ -45,6 +45,8 @@ export function GetVersion():Promise<string>;
 
 export function ImportCSV():Promise<main.DBInfo>;
 
+export function ImportEZToolsDirectory():Promise<main.DBInfo>;
+
 export function OpenDatabase():Promise<main.DBInfo>;
 
 export function PushToPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;

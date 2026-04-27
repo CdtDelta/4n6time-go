@@ -86,6 +86,10 @@ export function ImportCSV() {
   return window['go']['main']['App']['ImportCSV']();
 }
 
+export function ImportEZToolsDirectory() {
+  return window['go']['main']['App']['ImportEZToolsDirectory']();
+}
+
 export function OpenDatabase() {
   return window['go']['main']['App']['OpenDatabase']();
 }

@@ -14,8 +14,8 @@
 .DS_Store
 Thumbs.db
 
-# Test databases
-testdata/*.db
+# Test data
+testdata/
 
 # Build output
 build/bin/

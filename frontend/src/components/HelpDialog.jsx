@@ -14,12 +14,15 @@ Import Timeline: Imports a timeline file and creates a new SQLite database. Use 
 
 PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
+Import EZ Tools Folder: Batch imports all CSV files from an EZ Tools output directory. Use File > Import EZ Tools Folder or the Import EZ Tools Folder button on the welcome screen. See the EZ Tools Import section for details.
+
 Supported import formats:
 - CSV: Standard log2timeline/Plaso CSV output (comma-delimited with standard forensic timeline columns)
 - JSONL: Plaso JSON Lines output (both psort json_line format and raw Plaso storage format are supported)
 - TLN: 5-field pipe-delimited timeline format
 - L2TTLN: 7-field pipe-delimited extended timeline format
 - Dynamic CSV: Plaso default output with variable columns defined by header row
+- EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd). Auto-detected when importing single files; use Import EZ Tools Folder for batch import.
 
 After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
@@ -240,6 +243,25 @@ Disabling logging: Click "Disable Logging" to stop writing to the log file. The 
 Persistence: Check "Resume logging on next launch" to have logging automatically restart when you open 4n6time. The log file is reopened in append mode so previous entries are preserved. Uncheck the option to stop automatic logging on future launches. This setting is stored in your system config directory.`
   },
   {
+    id: 'eztool-import',
+    title: 'EZ Tools Import',
+    content: `EZ Tools are Eric Zimmerman's forensic artifact parsers for Windows evidence. 4n6time can import their CSV output directly, auto-detecting the tool and expanding multiple timestamp columns into individual timeline events.
+
+Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive), SrumECmd (SRUM database), MFTECmd (NTFS MFT), and SBECmd (ShellBags).
+
+Single file import: Use the normal Import Timeline button (or File > Import Timeline). EZ Tool CSVs are auto-detected from their column headers. No special steps are needed.
+
+Directory import: Use the Import EZ Tools Folder button on the welcome screen (or File > Import EZ Tools Folder) to batch import all CSV files from a tool output directory. This is useful after running a tool like EvtxECmd against an entire evidence image, which produces one CSV per event log.
+
+Multi-timestamp expansion: Each row in an EZ Tool CSV may contain multiple timestamp columns (e.g., Created, Modified, Accessed). Each non-empty timestamp becomes a separate timeline event. This gives you a complete picture of all temporal activity associated with each artifact.
+
+Source identification: The source column identifies which tool produced the data. Values include EVTX (event logs), PF (prefetch), LNK (shortcuts), JUMPLIST (jump lists), AMCACHE (amcache), SRUM (system resource usage), MFT (file system), and SHELLBAGS (shell bags).
+
+Type column: The type column shows which timestamp field each event represents. Examples: TimeCreated, LastRun, Created0x10, TargetModified, FirstInteracted. This tells you exactly what activity the timestamp records.
+
+Database compatibility: EZ Tool imports work with both SQLite and PostgreSQL databases. You can import EZ Tool data into an existing database to combine it with other evidence sources like Plaso timelines, creating a unified investigation timeline.`
+  },
+  {
     id: 'data-formats',
     title: 'Data Formats',
     content: `4n6time supports the following import formats:
@@ -256,7 +278,9 @@ Dynamic CSV: Plaso's default output format with variable columns defined by the 
 
 MACB Notation: Timestamps are categorized using MACB notation where M = Modified, A = Accessed, C = Changed (metadata), B = Born (created). These map from the timestamp_desc field in Plaso output.
 
-Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with .jsonl extension are treated as JSONL, .tln as TLN. For .csv and .txt files, the parser tries L2T CSV first (fixed 17 columns), then TLN (pipe-delimited), then dynamic CSV (header-based).`
+EZ Tools CSV: Output from Eric Zimmerman's forensic tools. Each tool produces CSVs with tool-specific columns. Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists, both Automatic and Custom), AmcacheParser (multiple sub-types: Unassociated Files, Device Containers, Device PnPs, Drive Binaries, Driver Packages, ShortCuts), SrumECmd (App Timeline, Energy Usage, Network Connections, Network Usages, Push Notifications, VFU Provider), MFTECmd (NTFS MFT), and SBECmd (ShellBags). Each timestamp column in the source CSV becomes a separate timeline event with appropriate MACB notation.
+
+Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with .jsonl extension are treated as JSONL, .tln as TLN. For .csv and .txt files, the parser tries TLN first (pipe-delimited), then EZ Tools CSV (recognized by tool-specific column signatures), then L2T CSV (fixed 17 columns), then dynamic CSV (header-based).`
   }
 ]
 
