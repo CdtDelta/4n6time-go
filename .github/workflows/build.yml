@@ -101,7 +101,10 @@ jobs:
           cd artifacts
           tar czf 4n6time-linux-amd64.tar.gz -C 4n6time-linux-amd64 .
           zip -j 4n6time-windows-amd64.zip 4n6time-windows-amd64/4n6time.exe
-          tar czf 4n6time-macos-arm64.tar.gz -C 4n6time-macos-arm64 .
+          mkdir -p 4n6time-macos-arm64/4n6time.app
+          mv 4n6time-macos-arm64/Contents 4n6time-macos-arm64/4n6time.app/
+          chmod +x 4n6time-macos-arm64/4n6time.app/Contents/MacOS/4n6time
+          tar czf 4n6time-macos-arm64.tar.gz -C 4n6time-macos-arm64 4n6time.app
 
       - name: Create release
         uses: softprops/action-gh-release@v2
