@@ -2,6 +2,30 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.12.0] - 2026-04-28
+
+### Added
+
+- Tab system: right-click any event to open a filtered view in a new tab, keeping the original view intact
+- Context menu with "Search in new tab" for 10 event fields (filename, host, user, source, sourcetype, desc, URL, computer_name, event_identifier, source_name)
+- Scoped filter dropdowns: each tab's filter options are populated from that tab's filtered results, not the entire database
+- Save tab queries to the saved queries list for reuse; saved tab queries open in a new tab when loaded
+- Tab session persistence: open tabs are saved per-database and restored when reopening (with prompt or auto-restore option)
+- Close confirmation dialog when closing the app with a database open, ensuring tab sessions are saved
+- Tab limit setting (default 5) configurable via Tools > Settings
+- Auto-restore tabs setting in Tools > Settings
+- Default PostgreSQL hostname setting in Tools > Settings (pre-fills the connection dialog)
+- Settings menu (Tools > Settings) for centralized application preferences
+- Stale data indicator on tabs with refresh button when data is modified in another tab
+- Tab bar with close buttons, active tab highlighting, and theme-aware styling
+
+### Fixed
+
+- Examiner notes no longer appear in filtered views when filtering on fields they don't have (host, filename, sourcetype, etc.)
+- Filter panel date range correctly scoped per tab
+- Histogram month-end date calculation now handles all months correctly (previously hardcoded day 31)
+- SQLite busy timeout set to 5 seconds to prevent lock contention errors during concurrent operations
+
 ## [0.11.1] - 2026-04-27
 
 ### Fixed

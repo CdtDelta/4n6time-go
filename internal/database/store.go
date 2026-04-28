@@ -27,8 +27,10 @@ type Store interface {
 
 	// Metadata and filters
 	GetDistinctValues(field string) (map[string]int64, error)
+	GetDistinctValuesFiltered(field, whereClause string, whereArgs []interface{}) (map[string]int64, error)
 	GetDistinctTags() ([]string, error)
 	GetMinMaxDate() (string, string, error)
+	GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (string, string, error)
 	GetTimelineHistogram(whereClause string, whereArgs []interface{}) ([]TimelineBucket, error)
 
 	// Saved queries
@@ -49,6 +51,10 @@ type Store interface {
 	BulkSetBookmark(ids []int64, bookmark int64) error
 	BulkUpdateExaminerNoteColor(ids []int64, color string) error
 	BulkSetExaminerNoteBookmark(ids []int64, bookmark int64) error
+
+	// Tab session persistence
+	SaveTabSession(data string) error
+	LoadTabSession() (string, error)
 
 	// Schema and maintenance
 	UpdateMetadata() error

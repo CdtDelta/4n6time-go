@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ConnectPostgres, CreatePostgresDatabase } from '../../wailsjs/go/main/App'
+import { useState, useEffect } from 'react'
+import { ConnectPostgres, CreatePostgresDatabase, GetPostgresHost } from '../../wailsjs/go/main/App'
 
 function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onClose }) {
   const [host, setHost] = useState('localhost')
@@ -10,6 +10,14 @@ function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onClose 
   const [sslMode, setSslMode] = useState('disable')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (visible) {
+      GetPostgresHost()
+        .then(h => setHost(h || 'localhost'))
+        .catch(() => {})
+    }
+  }, [visible])
 
   if (!visible) return null
 

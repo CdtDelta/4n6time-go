@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark } from '../wailsjs/go/main/App'
+import { OpenDatabase, ImportCSV, ImportEZToolsDirectory, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import PostgresDialog from './components/PostgresDialog'
 import FilterPanel from './components/FilterPanel'
@@ -17,9 +17,38 @@ import HelpDialog from './components/HelpDialog'
 import LoggingDialog from './components/LoggingDialog'
 import AddNoteDialog from './components/AddNoteDialog'
 import HighlightText from './components/HighlightText'
+import TabBar from './components/TabBar'
+import SettingsDialog from './components/SettingsDialog'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
+
+const MAIN_TAB_ID = 'tab-main'
+
+const makeTab = (id, label, baseQuery = null) => ({
+  id,
+  label,
+  isMain: id === MAIN_TAB_ID,
+  baseQuery,    // { field, op, value } | null
+  stale: false,
+  savedPage: 1,
+  savedSearch: '',
+  savedSearchMode: 'simple',
+  savedSearchText: '',
+  savedScrollRow: 0,
+  savedFilters: null,  // per-tab activeFilters snapshot
+})
+
+// Serialize non-main tabs into session JSON for SaveTabSession.
+// Returns empty string when only the main tab is open (signals "clear session").
+const buildTabSessionJSON = (tabs, activeTabId) => {
+  const nonMain = tabs.filter(t => !t.isMain)
+  if (nonMain.length === 0) return ''
+  return JSON.stringify({
+    tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })),
+    activeTabId,
+  })
+}
 
 // Named color options matching the database format and EventDetail's color picker
 const bulkColorOptions = [
@@ -39,7 +68,7 @@ const bulkColorDisplayMap = {
 
 // Column definitions for the forensic timeline grid
 const defaultColDefs = [
-  { field: 'bookmark', headerName: '\u2606', width: 45, pinned: 'left',
+  { field: 'bookmark', headerName: '☆', width: 45, pinned: 'left',
     sortable: true, filter: false, resizable: false,
     cellStyle: { textAlign: 'center', cursor: 'pointer', fontSize: '16px', padding: 0 },
   },
@@ -92,6 +121,7 @@ function App() {
   const [showAbout, setShowAbout] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showLogging, setShowLogging] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
   const [showAddNote, setShowAddNote] = useState(false)
@@ -103,6 +133,40 @@ function App() {
     catch { return 'forensic-dark' }
   })
   const [columnDefs, setColumnDefs] = useState(defaultColDefs)
+
+  // Tab state
+  const [tabs, setTabs] = useState(() => [makeTab(MAIN_TAB_ID, 'All Events')])
+  const [activeTabId, setActiveTabId] = useState(MAIN_TAB_ID)
+  const [tabLimit, setTabLimit] = useState(5)
+  const [contextMenu, setContextMenu] = useState(null)
+
+  const [activeFilters, setActiveFilters] = useState(null)
+  const [selectedEvent, setSelectedEvent] = useState(null)
+  const [selectedEvents, setSelectedEvents] = useState([])
+  const [bulkTag, setBulkTag] = useState('')
+  const [bulkColor, setBulkColor] = useState('')
+  const [detailHeight, setDetailHeight] = useState(280)
+  const [version, setVersion] = useState('')
+  const gridRef = useRef(null)
+  const resizingRef = useRef(false)
+  // Holds the active tab's baseQuery for use in loadPage without adding to deps
+  const activeBaseQueryRef = useRef(null)
+  // Suppresses the [activeSearch] effect during tab switches so the new tab's
+  // saved search state doesn't trigger an extraneous loadPage(1) for the old tab.
+  const tabSwitchingRef = useRef(false)
+  // Scroll row to restore after the next [events] update (tab switch).
+  const pendingScrollRowRef = useRef(0)
+  // Signals that the next [events] update should scroll to row 0 (page navigation).
+  const pendingScrollTopRef = useRef(false)
+  // Refs tracking latest state for callbacks with empty/limited deps arrays.
+  const tabsRef = useRef([makeTab(MAIN_TAB_ID, 'All Events')])
+  const activeTabIdRef = useRef(MAIN_TAB_ID)
+  const dbInfoRef = useRef(null)
+
+  // Pending session loaded from DB — shown in notification bar for manual restore.
+  const [pendingSession, setPendingSession] = useState(null)
+  // True when the user clicked the window close button — shows the confirm dialog.
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false)
 
   // Apply theme CSS variables to document root
   const applyTheme = useCallback((themeId) => {
@@ -125,19 +189,16 @@ function App() {
     catch { /* ignore */ }
     setShowThemePicker(false)
   }, [])
-  const [activeFilters, setActiveFilters] = useState(null)
-  const [selectedEvent, setSelectedEvent] = useState(null)
-  const [selectedEvents, setSelectedEvents] = useState([])
-  const [bulkTag, setBulkTag] = useState('')
-  const [bulkColor, setBulkColor] = useState('')
-  const [detailHeight, setDetailHeight] = useState(280)
-  const [version, setVersion] = useState('')
-  const gridRef = useRef(null)
-  const resizingRef = useRef(false)
 
-  // Load version on mount
+  // Keep refs in sync so callbacks with empty/limited deps always see current values.
+  useEffect(() => { tabsRef.current = tabs }, [tabs])
+  useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
+  useEffect(() => { dbInfoRef.current = dbInfo }, [dbInfo])
+
+  // Load version and tab limit on mount
   useEffect(() => {
     GetVersion().then(v => { if (v) setVersion(v) })
+    GetTabLimit().then(limit => { if (limit > 0) setTabLimit(limit) }).catch(() => {})
   }, [])
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
@@ -150,7 +211,7 @@ function App() {
   // Cell renderer that highlights search matches (skips bookmark column)
   const HighlightCellRenderer = useCallback((params) => {
     if (params.colDef.field === 'bookmark') {
-      return params.data?.bookmark ? '\u2605' : '\u2606'
+      return params.data?.bookmark ? '★' : '☆'
     }
     const search = params.context?.activeSearch
     if (!search || !params.value) return params.value ?? ''
@@ -168,11 +229,9 @@ function App() {
   const handleBookmarkToggle = useCallback(async (rowid) => {
     try {
       const newVal = await ToggleBookmark(rowid)
-      // Update the event in local state
       setEvents(prev => prev.map(e =>
         e.id === rowid ? { ...e, bookmark: newVal } : e
       ))
-      // Update selectedEvent if it's the one being toggled
       setSelectedEvent(prev =>
         prev && prev.id === rowid ? { ...prev, bookmark: newVal } : prev
       )
@@ -181,8 +240,9 @@ function App() {
     }
   }, [])
 
-  // Build the query request from current filters
+  // Build the query request from current filters and active tab's base query
   const buildQueryRequest = useCallback((page, filterState) => {
+    const bq = activeBaseQueryRef.current
     const req = {
       filters: [],
       logic: 'AND',
@@ -191,6 +251,9 @@ function App() {
       pageSize: PAGE_SIZE,
       searchText: activeSearch,
       bookmarkOnly: bookmarkOnly,
+      baseField: bq?.field || '',
+      baseOp: bq?.op || '',
+      baseValue: bq?.value || '',
     }
 
     const fs = filterState || activeFilters
@@ -217,11 +280,19 @@ function App() {
     setLoading(true)
     setStatus('Loading events...')
     setSearchError('')
+
     try {
       let result
 
       if (searchMode === 'advanced' && activeSearch) {
-        result = await AdvancedSearch(activeSearch, page, PAGE_SIZE)
+        // Inject the active tab's base query into the raw WHERE clause
+        const bq = activeBaseQueryRef.current
+        let clause = activeSearch
+        if (bq && bq.field) {
+          const safeVal = bq.value.replace(/'/g, "''")
+          clause = `${bq.field} ${bq.op} '${safeVal}' AND (${activeSearch})`
+        }
+        result = await AdvancedSearch(clause, page, PAGE_SIZE)
       } else {
         const req = buildQueryRequest(page, filterState)
         result = await QueryEvents(req)
@@ -235,7 +306,7 @@ function App() {
         const filterCount = (filterState || activeFilters)?.filters?.length || 0
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
         const searchLabel = activeSearch ? (searchMode === 'advanced' ? ' | Advanced: ' + activeSearch : ` | Search: "${activeSearch}"`) : ''
-        const bookmarkLabel = bookmarkOnly ? ' | \u2605 Bookmarked only' : ''
+        const bookmarkLabel = bookmarkOnly ? ' | ★ Bookmarked only' : ''
         setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}${bookmarkLabel}`)
       }
     } catch (err) {
@@ -248,6 +319,24 @@ function App() {
     }
   }, [dbInfo, buildQueryRequest, activeFilters, searchMode, activeSearch])
 
+  const handleRestoreTabSession = useCallback((sessionData) => {
+    try {
+      const { tabs: savedTabs, activeTabId: savedActiveId } = JSON.parse(sessionData)
+      if (!Array.isArray(savedTabs) || savedTabs.length === 0) return
+      const restored = savedTabs.map(t => makeTab(t.id, t.label, t.baseQuery || null))
+      setTabs([makeTab(MAIN_TAB_ID, 'All Events'), ...restored])
+      const targetId = savedActiveId || restored[0].id
+      setActiveTabId(targetId)
+      const targetTab = restored.find(t => t.id === targetId)
+      activeBaseQueryRef.current = targetTab?.baseQuery || null
+    } catch { /* malformed JSON — ignore */ }
+  }, [])
+
+  const handleDismissSession = useCallback(() => {
+    SaveTabSession('').catch(() => {})
+    setPendingSession(null)
+  }, [])
+
   const handleOpenDB = useCallback(async () => {
     try {
       setStatus('Opening database...')
@@ -259,13 +348,24 @@ function App() {
         setSelectedEvent(null)
         setStatus(`Opened: ${info.path} (${info.eventCount.toLocaleString()} events)`)
         await loadPage(1, info, null)
+        try {
+          const sessionData = await LoadTabSession()
+          if (sessionData) {
+            const autoRestore = await GetAutoRestoreTabs().catch(() => false)
+            if (autoRestore) {
+              handleRestoreTabSession(sessionData)
+            } else {
+              setPendingSession(sessionData)
+            }
+          }
+        } catch { /* session load failure is non-fatal */ }
       } else {
         setStatus('')
       }
     } catch (err) {
       setStatus('Error: ' + err)
     }
-  }, [loadPage])
+  }, [loadPage, handleRestoreTabSession])
 
   const handlePostgresConnect = useCallback(async (info) => {
     setShowPostgres(false)
@@ -275,7 +375,18 @@ function App() {
     setSelectedEvent(null)
     setStatus(`Connected: ${info.path} (${info.eventCount.toLocaleString()} events)`)
     await loadPage(1, info, null)
-  }, [loadPage])
+    try {
+      const sessionData = await LoadTabSession()
+      if (sessionData) {
+        const autoRestore = await GetAutoRestoreTabs().catch(() => false)
+        if (autoRestore) {
+          handleRestoreTabSession(sessionData)
+        } else {
+          setPendingSession(sessionData)
+        }
+      }
+    } catch { /* session load failure is non-fatal */ }
+  }, [loadPage, handleRestoreTabSession])
 
   const handlePushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
     setShowPushPostgres(false)
@@ -305,6 +416,43 @@ function App() {
         setSelectedEvent(null)
         setStatus(`Imported: ${info.eventCount.toLocaleString()} events`)
         await loadPage(1, info, null)
+        // Only offer session restore if no non-main tabs are currently open.
+        const currentNonMain = tabsRef.current.filter(t => !t.isMain)
+        if (currentNonMain.length === 0) {
+          try {
+            const sessionData = await LoadTabSession()
+            if (sessionData) {
+              const autoRestore = await GetAutoRestoreTabs().catch(() => false)
+              if (autoRestore) {
+                handleRestoreTabSession(sessionData)
+              } else {
+                setPendingSession(sessionData)
+              }
+            }
+          } catch { /* non-fatal */ }
+        }
+      } else {
+        setStatus('')
+      }
+    } catch (err) {
+      setStatus('Error: ' + err)
+    } finally {
+      setImporting(false)
+    }
+  }, [loadPage, handleRestoreTabSession])
+
+  const handleImportEZToolsDir = useCallback(async () => {
+    try {
+      setImporting(true)
+      setStatus('Importing EZ Tools folder...')
+      const info = await ImportEZToolsDirectory()
+      if (info) {
+        setDbInfo(info)
+        setActiveFilters(null)
+        setShowFilters(false)
+        setSelectedEvent(null)
+        setStatus(`Imported: ${info.eventCount.toLocaleString()} events`)
+        await loadPage(1, info, null)
       } else {
         setStatus('')
       }
@@ -317,7 +465,16 @@ function App() {
 
   const handleCloseDB = useCallback(async () => {
     try {
+      // Save non-main tabs before closing; empty string clears if main-only.
+      const nonMain = tabsRef.current.filter(t => !t.isMain)
+      if (nonMain.length > 0) {
+        const sessionData = JSON.stringify({ tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })), activeTabId: activeTabIdRef.current })
+        await SaveTabSession(sessionData).catch(() => {})
+      } else {
+        await SaveTabSession('').catch(() => {})
+      }
       await CloseDatabase()
+      dbInfoRef.current = null
       setDbInfo(null)
       setEvents([])
       setTotalCount(0)
@@ -326,30 +483,36 @@ function App() {
       setShowFilters(false)
       setSelectedEvent(null)
       setStatus('')
+      setPendingSession(null)
+      // Reset tabs to just the main tab
+      setTabs([makeTab(MAIN_TAB_ID, 'All Events')])
+      setActiveTabId(MAIN_TAB_ID)
+      activeBaseQueryRef.current = null
     } catch (err) {
       setStatus('Error: ' + err)
     }
   }, [])
 
   const handlePrevPage = useCallback(() => {
-    if (currentPage > 1) loadPage(currentPage - 1)
+    if (currentPage > 1) { pendingScrollTopRef.current = true; loadPage(currentPage - 1) }
   }, [currentPage, loadPage])
 
   const handleNextPage = useCallback(() => {
-    if (currentPage < totalPages) loadPage(currentPage + 1)
+    if (currentPage < totalPages) { pendingScrollTopRef.current = true; loadPage(currentPage + 1) }
   }, [currentPage, totalPages, loadPage])
 
   const handleFirstPage = useCallback(() => {
-    if (currentPage > 1) loadPage(1)
+    if (currentPage > 1) { pendingScrollTopRef.current = true; loadPage(1) }
   }, [currentPage, loadPage])
 
   const handleLastPage = useCallback(() => {
-    if (currentPage < totalPages) loadPage(totalPages)
+    if (currentPage < totalPages) { pendingScrollTopRef.current = true; loadPage(totalPages) }
   }, [currentPage, totalPages, loadPage])
 
   const handlePageInputSubmit = useCallback(() => {
     const num = parseInt(pageInputValue, 10)
     if (!isNaN(num) && num >= 1 && num <= totalPages && num !== currentPage) {
+      pendingScrollTopRef.current = true
       loadPage(num)
     } else {
       setPageInputValue(String(currentPage))
@@ -411,10 +574,10 @@ function App() {
 
   // Reload when activeSearch changes
   useEffect(() => {
+    if (tabSwitchingRef.current) return
     if (dbInfo) {
       loadPage(1)
     }
-    // Refresh cells to update highlighting
     if (gridRef.current?.api) {
       gridRef.current.api.refreshCells({ force: true })
     }
@@ -426,6 +589,29 @@ function App() {
       loadPage(1)
     }
   }, [bookmarkOnly]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reload when active tab changes (new baseQuery takes effect)
+  useEffect(() => {
+    tabSwitchingRef.current = false
+    if (dbInfo) {
+      const tab = tabs.find(t => t.id === activeTabId)
+      loadPage(tab?.savedPage || 1)
+    }
+  }, [activeTabId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll after events load: to top on page navigation, or to saved row on tab switch.
+  useEffect(() => {
+    if (pendingScrollTopRef.current) {
+      pendingScrollTopRef.current = false
+      setTimeout(() => { gridRef.current?.api?.ensureIndexVisible?.(0, 'top') }, 50)
+    } else {
+      const row = pendingScrollRowRef.current
+      if (row > 0 && gridRef.current?.api) {
+        pendingScrollRowRef.current = 0
+        setTimeout(() => { gridRef.current?.api?.ensureIndexVisible?.(row, 'top') }, 50)
+      }
+    }
+  }, [events])
 
   const toggleFilters = useCallback(() => {
     setShowFilters(prev => !prev)
@@ -448,10 +634,16 @@ function App() {
     }))
   }, [])
 
+  // Mark all tabs OTHER than the active one as stale
+  const markOtherTabsStale = useCallback(() => {
+    setTabs(prev => prev.map(t => t.id !== activeTabId ? { ...t, stale: true } : t))
+  }, [activeTabId])
+
   const handleNoteAdded = useCallback(() => {
     loadPage(currentPage)
     setFilterVersion(v => v + 1)
-  }, [currentPage, loadPage])
+    markOtherTabsStale()
+  }, [currentPage, loadPage, markOtherTabsStale])
 
   const handleDeleteExaminerNote = useCallback(async (negatedId) => {
     try {
@@ -460,11 +652,12 @@ function App() {
       loadPage(currentPage)
       setFilterVersion(v => v + 1)
       setStatus('Examiner note deleted')
+      markOtherTabsStale()
     } catch (err) {
       console.error('Error deleting examiner note:', err)
       setStatus('Error deleting note: ' + err)
     }
-  }, [currentPage, loadPage])
+  }, [currentPage, loadPage, markOtherTabsStale])
 
   const handleExportCSV = useCallback(async () => {
     try {
@@ -486,17 +679,17 @@ function App() {
   }, [])
 
   const handleTimelineSelectRange = useCallback((startTs, endTs) => {
-    // Expand timestamps to cover the full bucket range
     let from = startTs
     let to = endTs
 
-    // If it's a single bucket click (same start/end), expand to cover the bucket
     if (startTs === endTs) {
       // Monthly bucket: "2024-01" -> full month
       if (startTs.length === 7) {
         from = startTs + '-01 00:00:00'
-        // Approximate end of month
-        to = startTs + '-31 23:59:59'
+        // Compute actual last day: new Date(year, month, 0) returns the last day of the given month
+        const [y, m] = startTs.split('-').map(Number)
+        const lastDay = new Date(y, m, 0).getDate()
+        to = startTs + '-' + String(lastDay).padStart(2, '0') + ' 23:59:59'
       }
       // Daily bucket: "2024-01-15" -> full day
       else if (startTs.length === 10) {
@@ -524,7 +717,6 @@ function App() {
   }, [activeFilters, loadPage])
 
   const handleLoadSavedQuery = useCallback((filterState) => {
-    // Detect advanced query format
     if (filterState && filterState.advanced && filterState.whereClause) {
       setSearchMode('advanced')
       setSearchText(filterState.whereClause)
@@ -554,7 +746,6 @@ function App() {
   const handleCloseDetail = useCallback(() => {
     setSelectedEvent(null)
     setSelectedEvents([])
-    // Deselect rows in the grid
     if (gridRef.current?.api) {
       gridRef.current.api.deselectAll()
     }
@@ -575,10 +766,11 @@ function App() {
       setBulkTag('')
       setBulkColor('')
       loadPage(currentPage)
+      markOtherTabsStale()
     } catch (err) {
       console.error('Bulk apply error:', err)
     }
-  }, [selectedEvents, bulkColor, bulkTag, loadPage, currentPage])
+  }, [selectedEvents, bulkColor, bulkTag, loadPage, currentPage, markOtherTabsStale])
 
   const handleBulkBookmark = useCallback(async (value) => {
     const ids = selectedEvents.map(e => e.id)
@@ -587,34 +779,33 @@ function App() {
       setEvents(prev => prev.map(e => ids.includes(e.id) ? { ...e, bookmark: value } : e))
       setSelectedEvents(prev => prev.map(e => ({ ...e, bookmark: value })))
       setTimeout(() => { if (gridRef.current?.api) gridRef.current.api.redrawRows() }, 0)
+      markOtherTabsStale()
     } catch (err) {
       console.error('Bulk bookmark error:', err)
     }
-  }, [selectedEvents])
+  }, [selectedEvents, markOtherTabsStale])
 
   const handleEventUpdate = useCallback((id, fields) => {
-    // Update the event in the local state so the grid reflects changes
     setEvents(prev => prev.map(e => {
       if (e.id === id) {
         return { ...e, ...fields }
       }
       return e
     }))
-    // Also update the selected event
     setSelectedEvent(prev => {
       if (prev && prev.id === id) {
         return { ...prev, ...fields }
       }
       return prev
     })
-    // Refresh row styles in the grid (for color changes)
     setTimeout(() => {
       if (gridRef.current?.api) {
         gridRef.current.api.redrawRows()
       }
     }, 50)
     setStatus(`Event ${id} updated`)
-  }, [])
+    markOtherTabsStale()
+  }, [markOtherTabsStale])
 
   // Drag resize for detail panel
   const handleResizeStart = useCallback((e) => {
@@ -644,12 +835,209 @@ function App() {
     document.addEventListener('mouseup', onMouseUp)
   }, [detailHeight])
 
+  // --- Tab management ---
+
+  const handleTabClick = useCallback((tabId) => {
+    if (tabId === activeTabId || !dbInfo) return
+    const newTab = tabs.find(t => t.id === tabId)
+    if (!newTab) return
+
+    // Suppress the [activeSearch] effect while we swap state between tabs.
+    tabSwitchingRef.current = true
+
+    // Snapshot the outgoing tab's scroll position before the grid changes.
+    const firstRow = gridRef.current?.api?.getFirstDisplayedRow?.() ?? 0
+
+    // Save current page, search state, filters, and scroll row to the leaving tab.
+    setTabs(prev => prev.map(t => t.id === activeTabId ? {
+      ...t,
+      savedPage: currentPage,
+      savedSearch: activeSearch,
+      savedSearchMode: searchMode,
+      savedSearchText: searchText,
+      savedScrollRow: firstRow,
+      savedFilters: activeFilters,
+    } : t))
+
+    // Update the base query ref immediately (before the render/effect)
+    activeBaseQueryRef.current = newTab.baseQuery || null
+    setCurrentPage(newTab.savedPage || 1)
+    setActiveSearch(newTab.savedSearch || '')
+    setSearchMode(newTab.savedSearchMode || 'simple')
+    setSearchText(newTab.savedSearchText || '')
+    setSearchError('')
+    setActiveFilters(newTab.savedFilters || null)
+    pendingScrollRowRef.current = newTab.savedScrollRow || 0
+    setSelectedEvent(null)
+    setSelectedEvents([])
+    setActiveTabId(tabId)
+  }, [activeTabId, tabs, currentPage, dbInfo, activeSearch, searchMode, searchText, activeFilters])
+
+  const handleTabClose = useCallback((tabId) => {
+    const idx = tabs.findIndex(t => t.id === tabId)
+    const newTabs = tabs.filter(t => t.id !== tabId)
+    const prevTab = tabs[idx - 1] || tabs[0]
+    const newActiveId = tabId === activeTabId ? (prevTab?.id || MAIN_TAB_ID) : activeTabId
+
+    setTabs(prev => prev.filter(t => t.id !== tabId))
+
+    if (tabId === activeTabId) {
+      tabSwitchingRef.current = true
+      activeBaseQueryRef.current = prevTab?.baseQuery || null
+      setCurrentPage(prevTab?.savedPage || 1)
+      setActiveSearch(prevTab?.savedSearch || '')
+      setSearchMode(prevTab?.savedSearchMode || 'simple')
+      setSearchText(prevTab?.savedSearchText || '')
+      setSearchError('')
+      setActiveFilters(prevTab?.savedFilters || null)
+      pendingScrollRowRef.current = prevTab?.savedScrollRow || 0
+      setSelectedEvent(null)
+      setSelectedEvents([])
+      setActiveTabId(prevTab?.id || MAIN_TAB_ID)
+    }
+  }, [activeTabId, tabs])
+
+  const handleTabRefresh = useCallback(() => {
+    setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, stale: false } : t))
+    setFilterVersion(v => v + 1)
+    loadPage(currentPage)
+  }, [activeTabId, currentPage, loadPage])
+
+  const handleSetTabLimit = useCallback((newLimit) => {
+    setTabLimit(newLimit)
+  }, [])
+
+  // Open a new tab with a base query filter from context menu
+  const handleOpenInNewTab = useCallback((field, op, value, label) => {
+    if (tabs.length >= tabLimit) {
+      setStatus(`Tab limit reached (${tabLimit}). Close a tab or increase the limit in settings.`)
+      return
+    }
+    const id = 'tab-' + Date.now()
+    const newTab = makeTab(id, label, { field, op, value })
+
+    // Suppress the [activeSearch] effect while we swap state between tabs.
+    tabSwitchingRef.current = true
+
+    // Snapshot the outgoing tab's scroll position before the grid changes.
+    const firstRow = gridRef.current?.api?.getFirstDisplayedRow?.() ?? 0
+
+    setTabs(prev => [
+      ...prev.map(t => t.id === activeTabId ? {
+        ...t,
+        savedPage: currentPage,
+        savedSearch: activeSearch,
+        savedSearchMode: searchMode,
+        savedSearchText: searchText,
+        savedScrollRow: firstRow,
+        savedFilters: activeFilters,
+      } : t),
+      newTab,
+    ])
+    activeBaseQueryRef.current = { field, op, value }
+    setCurrentPage(1)
+    setActiveSearch('')
+    setSearchMode('simple')
+    setSearchText('')
+    setSearchError('')
+    setActiveFilters(null)
+    pendingScrollRowRef.current = 0
+    setSelectedEvent(null)
+    setSelectedEvents([])
+    setActiveTabId(id)
+  }, [tabs, tabLimit, activeTabId, currentPage, activeSearch, searchMode, searchText, activeFilters])
+
+  const handleSaveTabQuery = useCallback(async (tabId, name) => {
+    const tab = tabs.find(t => t.id === tabId)
+    if (!tab?.baseQuery) return
+    const { field, op, value } = tab.baseQuery
+    const queryData = JSON.stringify({
+      tabQuery: true,
+      field,
+      op,
+      value,
+      label: tab.label,
+    })
+    try {
+      await SaveQuery(name, queryData)
+      setStatus(`Saved tab query: "${name}"`)
+    } catch (err) {
+      setStatus('Error saving tab query: ' + err)
+    }
+  }, [tabs])
+
+  // Right-click context menu on grid cells
+  const handleCellContextMenu = useCallback((params) => {
+    params.event.preventDefault()
+    const row = params.data
+    if (!row) return
+
+    const fieldDefs = [
+      { key: 'filename',         label: 'filename' },
+      { key: 'host',             label: 'host' },
+      { key: 'user',             label: 'user' },
+      { key: 'source',           label: 'source' },
+      { key: 'sourcetype',       label: 'sourcetype' },
+      { key: 'desc',             label: 'desc' },
+      { key: 'url',              label: 'URL',           dbField: 'URL' },
+      { key: 'computer_name',    label: 'computer_name' },
+      { key: 'event_identifier', label: 'event_identifier' },
+      { key: 'source_name',      label: 'source_name' },
+    ]
+
+    const items = []
+    for (const f of fieldDefs) {
+      const { key, label } = f
+      const val = row[key]
+      if (val != null && String(val).trim()) {
+        const strVal = String(val).trim()
+        const displayVal = key === 'desc' && strVal.length > 60
+          ? strVal.substring(0, 60) + '...'
+          : strVal
+        const dbField = f.dbField || f.key
+        const exactFields = new Set(['event_identifier', 'filename', 'URL'])
+        items.push({
+          tabLabel: `${label}: ${strVal.substring(0, 30)}`,
+          menuLabel: `${label}: ${displayVal}`,
+          field: dbField,
+          op: exactFields.has(dbField) ? '=' : 'LIKE',
+          value: strVal,
+        })
+      }
+    }
+
+    const estimatedHeight = 40 + items.length * 30
+    const estimatedWidth = 400
+    let menuX = params.event.clientX
+    let menuY = params.event.clientY
+    if (menuX + estimatedWidth > window.innerWidth) menuX = window.innerWidth - estimatedWidth - 8
+    if (menuY + estimatedHeight > window.innerHeight) menuY = window.innerHeight - estimatedHeight - 8
+    if (menuX < 8) menuX = 8
+    if (menuY < 8) menuY = 8
+
+    setContextMenu({ x: menuX, y: menuY, items })
+  }, [])
+
+  // Close context menu on outside click or Escape
+  useEffect(() => {
+    if (!contextMenu) return
+    const onClick = () => setContextMenu(null)
+    const onKey = (e) => { if (e.key === 'Escape') setContextMenu(null) }
+    window.addEventListener('click', onClick)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('click', onClick)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [contextMenu])
+
   // Listen for native menu events from Go
   const EventsOn = window.runtime?.EventsOn || function() { return () => {} }
 
   useEffect(() => {
     const cancelOpen = EventsOn('menu:open-database', () => { handleOpenDB() })
     const cancelImport = EventsOn('menu:import-csv', () => { handleImportCSV() })
+    const cancelImportEZ = EventsOn('menu:import-eztool-dir', () => { handleImportEZToolsDir() })
     const cancelClose = EventsOn('menu:close-database', () => { handleCloseDB() })
     const cancelExport = EventsOn('menu:export-csv', () => { handleExportCSV() })
     const cancelTheme = EventsOn('menu:theme', () => { setShowThemePicker(true) })
@@ -660,9 +1048,11 @@ function App() {
     const cancelAbout = EventsOn('menu:about', () => { setShowAbout(true) })
     const cancelHelp = EventsOn('menu:help', () => { setShowHelp(true) })
     const cancelLogging = EventsOn('menu:logging', () => { setShowLogging(true) })
+    const cancelSettings = EventsOn('menu:settings', () => { setShowSettings(true) })
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
+      if (typeof cancelImportEZ === 'function') cancelImportEZ()
       if (typeof cancelClose === 'function') cancelClose()
       if (typeof cancelExport === 'function') cancelExport()
       if (typeof cancelTheme === 'function') cancelTheme()
@@ -673,8 +1063,33 @@ function App() {
       if (typeof cancelAbout === 'function') cancelAbout()
       if (typeof cancelHelp === 'function') cancelHelp()
       if (typeof cancelLogging === 'function') cancelLogging()
+      if (typeof cancelSettings === 'function') cancelSettings()
     }
-  }, [handleOpenDB, handleImportCSV, handleCloseDB, handleExportCSV])
+  }, [handleOpenDB, handleImportCSV, handleImportEZToolsDir, handleCloseDB, handleExportCSV])
+
+  // Handle window close button and File > Quit — show React confirmation dialog.
+  // Registered once with empty deps; actual save+quit handled in the dialog's confirm handler.
+  // menu:quit skips the dialog when no database is open.
+  useEffect(() => {
+    const cancelBeforeClose = EventsOn('app:before-close', () => {
+      if (dbInfoRef.current) {
+        setShowCloseConfirm(true)
+      } else {
+        ForceQuit()
+      }
+    })
+    const cancelQuit = EventsOn('menu:quit', () => {
+      if (dbInfoRef.current) {
+        setShowCloseConfirm(true)
+      } else {
+        ForceQuit()
+      }
+    })
+    return () => {
+      if (typeof cancelBeforeClose === 'function') cancelBeforeClose()
+      if (typeof cancelQuit === 'function') cancelQuit()
+    }
+  }, [])
 
   // Color-coded row styling based on the event's color field
   const getRowStyle = useCallback((params) => {
@@ -697,6 +1112,8 @@ function App() {
     (activeFilters.filters && activeFilters.filters.length > 0) ||
     (activeFilters.dateFrom && activeFilters.dateTo)
   )
+
+  const activeTab = tabs.find(t => t.id === activeTabId)
 
   // If no database is open, show the welcome screen
   if (!dbInfo) {
@@ -722,6 +1139,11 @@ function App() {
           visible={showLogging}
           onClose={() => setShowLogging(false)}
         />
+        <SettingsDialog
+          visible={showSettings}
+          onClose={() => setShowSettings(false)}
+          onTabLimitChange={handleSetTabLimit}
+        />
         <PostgresDialog
           visible={showPostgres}
           onConnect={handlePostgresConnect}
@@ -733,6 +1155,7 @@ function App() {
           <div className="actions">
             <button onClick={handleOpenDB}>Open Database</button>
             <button onClick={handleImportCSV}>Import Timeline</button>
+            <button onClick={handleImportEZToolsDir}>Import EZ Tools Folder</button>
             <button onClick={() => setShowPostgres(true)}>Connect to PostgreSQL</button>
           </div>
         </div>
@@ -851,7 +1274,7 @@ function App() {
           onClick={() => setBookmarkOnly(prev => !prev)}
           title={bookmarkOnly ? 'Show all events' : 'Show bookmarked only'}
         >
-          {bookmarkOnly ? '\u2605' : '\u2606'}
+          {bookmarkOnly ? '★' : '☆'}
         </button>
         <button
           className="add-note-btn"
@@ -870,6 +1293,36 @@ function App() {
           {dbInfo.minDate && ` | ${dbInfo.minDate} to ${dbInfo.maxDate}`}
         </span>
       </div>
+
+      <TabBar
+        tabs={tabs}
+        activeTabId={activeTabId}
+        onTabClick={handleTabClick}
+        onTabClose={handleTabClose}
+        isActiveStale={activeTab?.stale || false}
+        onRefresh={handleTabRefresh}
+        onSaveTab={handleSaveTabQuery}
+      />
+
+      {pendingSession && (() => {
+        let tabCount = 0
+        try { tabCount = JSON.parse(pendingSession).tabs?.length || 0 } catch {}
+        return (
+          <div className="session-restore-bar">
+            <span className="session-restore-msg">
+              {tabCount} saved tab{tabCount !== 1 ? 's' : ''} from last session
+            </span>
+            <button
+              className="session-restore-btn"
+              onClick={() => { handleRestoreTabSession(pendingSession); setPendingSession(null) }}
+            >Restore</button>
+            <button
+              className="session-dismiss-btn"
+              onClick={handleDismissSession}
+            >Dismiss</button>
+          </div>
+        )
+      })()}
 
       <ColumnChooser
         visible={showColumnChooser}
@@ -901,6 +1354,12 @@ function App() {
         onClose={() => setShowLogging(false)}
       />
 
+      <SettingsDialog
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        onTabLimitChange={handleSetTabLimit}
+      />
+
       <PostgresDialog
         visible={showPushPostgres}
         mode="push"
@@ -914,6 +1373,71 @@ function App() {
         onAdded={handleNoteAdded}
       />
 
+      {showCloseConfirm && (
+        <div className="modal-overlay">
+          <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+            <div className="logging-header">
+              <h2>Close 4n6time?</h2>
+            </div>
+            <div className="logging-content">
+              <p>Any open tabs will be saved for next session.</p>
+              <div className="logging-actions">
+                <button onClick={async () => {
+                  try {
+                    if (dbInfoRef.current) {
+                      const nonMain = tabsRef.current.filter(t => !t.isMain)
+                      const sessionData = nonMain.length > 0
+                        ? JSON.stringify({
+                            tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })),
+                            activeTabId: activeTabIdRef.current,
+                          })
+                        : ''
+                      await SaveTabSession(sessionData).catch(() => {})
+                    }
+                  } catch { /* ignore save errors — must quit */ }
+                  ForceQuit()
+                }}>Close</button>
+                <button className="logging-close-btn" onClick={() => setShowCloseConfirm(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Right-click context menu overlay */}
+      {contextMenu && (
+        <div
+          className="context-menu"
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="context-menu-header">
+            <span>Search in new tab</span>
+            <button
+              className="context-menu-close"
+              onClick={() => setContextMenu(null)}
+              title="Dismiss"
+            >×</button>
+          </div>
+          {contextMenu.items.length === 0 ? (
+            <div className="context-menu-item disabled">No fields available</div>
+          ) : (
+            contextMenu.items.map((item, i) => (
+              <div
+                key={i}
+                className="context-menu-item"
+                onClick={() => {
+                  setContextMenu(null)
+                  handleOpenInNewTab(item.field, item.op, item.value, item.tabLabel)
+                }}
+              >
+                {item.menuLabel}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       <div className="main-content">
         <FilterPanel
           visible={showFilters}
@@ -922,11 +1446,13 @@ function App() {
           dbInfo={dbInfo}
           activeFilters={activeFilters}
           filterVersion={filterVersion}
+          baseQuery={activeTab?.baseQuery || null}
         />
 
         <SavedQueries
           visible={showSavedQueries}
           onLoad={handleLoadSavedQuery}
+          onOpenInNewTab={({ field, op, value, label }) => handleOpenInNewTab(field, op, value, label)}
           currentFilters={activeFilters}
           dbInfo={dbInfo}
         />
@@ -951,6 +1477,7 @@ function App() {
               rowSelection="multiple"
               suppressRowClickSelection={false}
               suppressCellFocus={false}
+              suppressContextMenu={true}
               getRowId={(params) => String(params.data.id)}
               getRowStyle={getRowStyle}
               onSelectionChanged={handleRowSelected}
@@ -959,6 +1486,7 @@ function App() {
                   handleBookmarkToggle(params.data.id)
                 }
               }}
+              onCellContextMenu={handleCellContextMenu}
               overlayLoadingTemplate='<span>Loading events...</span>'
               overlayNoRowsTemplate='<span>No events to display</span>'
               loading={loading}

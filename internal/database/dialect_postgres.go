@@ -126,3 +126,10 @@ func (d *PostgresDialect) CreateExaminerNotesTableSQL() string {
 func (d *PostgresDialect) InsertExaminerNoteSQL() string {
 	return `INSERT INTO examiner_notes (datetime, description, tag, color, bookmark) VALUES ($1, $2, $3, $4, $5) RETURNING id`
 }
+
+func (d *PostgresDialect) CreateTabSessionsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_tab_sessions (
+		id SERIAL PRIMARY KEY,
+		session_data TEXT
+	)`
+}

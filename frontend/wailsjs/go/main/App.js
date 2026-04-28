@@ -54,8 +54,24 @@ export function ExportCSV(arg1) {
   return window['go']['main']['App']['ExportCSV'](arg1);
 }
 
+export function ForceQuit() {
+  return window['go']['main']['App']['ForceQuit']();
+}
+
+export function GetAutoRestoreTabs() {
+  return window['go']['main']['App']['GetAutoRestoreTabs']();
+}
+
 export function GetDistinctValues(arg1) {
   return window['go']['main']['App']['GetDistinctValues'](arg1);
+}
+
+export function GetFilteredDistinctValues(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GetFilteredDistinctValues'](arg1, arg2, arg3, arg4);
+}
+
+export function GetFilteredMinMaxDate(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetFilteredMinMaxDate'](arg1, arg2, arg3);
 }
 
 export function GetLoggingStatus() {
@@ -66,8 +82,16 @@ export function GetMinMaxDate() {
   return window['go']['main']['App']['GetMinMaxDate']();
 }
 
+export function GetPostgresHost() {
+  return window['go']['main']['App']['GetPostgresHost']();
+}
+
 export function GetSavedQueries() {
   return window['go']['main']['App']['GetSavedQueries']();
+}
+
+export function GetTabLimit() {
+  return window['go']['main']['App']['GetTabLimit']();
 }
 
 export function GetTags() {
@@ -90,6 +114,10 @@ export function ImportEZToolsDirectory() {
   return window['go']['main']['App']['ImportEZToolsDirectory']();
 }
 
+export function LoadTabSession() {
+  return window['go']['main']['App']['LoadTabSession']();
+}
+
 export function OpenDatabase() {
   return window['go']['main']['App']['OpenDatabase']();
 }
@@ -106,8 +134,24 @@ export function SaveQuery(arg1, arg2) {
   return window['go']['main']['App']['SaveQuery'](arg1, arg2);
 }
 
+export function SaveTabSession(arg1) {
+  return window['go']['main']['App']['SaveTabSession'](arg1);
+}
+
+export function SetAutoRestoreTabs(arg1) {
+  return window['go']['main']['App']['SetAutoRestoreTabs'](arg1);
+}
+
 export function SetLoggingPersist(arg1) {
   return window['go']['main']['App']['SetLoggingPersist'](arg1);
+}
+
+export function SetPostgresHost(arg1) {
+  return window['go']['main']['App']['SetPostgresHost'](arg1);
+}
+
+export function SetTabLimit(arg1) {
+  return window['go']['main']['App']['SetTabLimit'](arg1);
 }
 
 export function ToggleBookmark(arg1) {

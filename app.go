@@ -25,9 +25,10 @@ import (
 // App is the main application struct that Wails binds to the frontend.
 // All exported methods become callable from JavaScript.
 type App struct {
-	ctx    context.Context
-	store  database.Store
-	driver string // "sqlite" or "postgres"
+	ctx     context.Context
+	store   database.Store
+	driver  string // "sqlite" or "postgres"
+	closing bool   // true once ForceQuit is called, lets OnBeforeClose pass through
 
 	// Logging
 	logFile    *os.File
@@ -156,6 +157,24 @@ func (a *App) shutdown(ctx context.Context) {
 		a.logFile = nil
 	}
 	a.logMu.Unlock()
+}
+
+// OnBeforeClose is called by Wails when the user closes the window.
+// If ForceQuit has already set the closing flag, allow the close to proceed.
+// Otherwise emit an event so the frontend can show its confirmation dialog.
+func (a *App) OnBeforeClose(ctx context.Context) (prevent bool) {
+	if a.closing {
+		return false // let Wails proceed with shutdown
+	}
+	runtime.EventsEmit(a.ctx, "app:before-close")
+	return true
+}
+
+// ForceQuit sets the closing flag then calls runtime.Quit.
+// The Wails shutdown lifecycle calls shutdown() which handles store cleanup.
+func (a *App) ForceQuit() {
+	a.closing = true
+	runtime.Quit(a.ctx)
 }
 
 // -- File Operations --
@@ -512,6 +531,10 @@ type QueryRequest struct {
 	PageSize     int          `json:"pageSize"`
 	SearchText   string       `json:"searchText"`
 	BookmarkOnly bool         `json:"bookmarkOnly"`
+	// BaseField/BaseOp/BaseValue: optional tab base query ANDed with all filters.
+	BaseField string `json:"baseField"`
+	BaseOp    string `json:"baseOp"`
+	BaseValue string `json:"baseValue"`
 }
 
 type FilterItem struct {
@@ -601,6 +624,44 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		q.AddPredicate(p)
 	}
 
+	// Tab base query: always ANDed with all other filters
+	if req.BaseField != "" {
+		var baseOp query.Operator
+		switch req.BaseOp {
+		case "=":
+			baseOp = query.Equal
+		case "LIKE":
+			baseOp = query.Like
+		default:
+			baseOp = query.Equal
+		}
+		if p := query.Simple(req.BaseField, baseOp, req.BaseValue); p != nil {
+			q.AddPredicate(p)
+		}
+	}
+
+	// Determine whether to exclude examiner notes from the UNION. Notes only have
+	// meaningful data for: source, datetime, tag, color, bookmark, desc.
+	// Any filter on a field NOT in this set means notes can't satisfy it, so skip them.
+	// (sourcetype is excluded from the "compatible" set because any sourcetype filter
+	// targets specific evidence subtypes, not examiner notes.)
+	examinerCompatibleFields := map[string]bool{
+		"source": true, "datetime": true, "tag": true,
+		"color": true, "bookmark": true, "desc": true,
+	}
+	excludeNotes := false
+	if req.BaseField != "" && !examinerCompatibleFields[req.BaseField] {
+		excludeNotes = true
+	}
+	if !excludeNotes {
+		for _, f := range req.Filters {
+			if !examinerCompatibleFields[f.Field] {
+				excludeNotes = true
+				break
+			}
+		}
+	}
+
 	// Order by
 	if req.OrderBy != "" {
 		q.OrderBy(req.OrderBy)
@@ -616,6 +677,12 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	// Build and execute
 	sqlStr, args := q.Build()
 	countSQL, countArgs := q.BuildCount()
+
+	// Inject hint so wrapWithExaminerNotesUnion skips the UNION.
+	if excludeNotes {
+		sqlStr = "/* no-notes */ " + sqlStr
+		countSQL = "/* no-notes */ " + countSQL
+	}
 
 	// Get total count (ignore error to preserve existing behavior: count stays 0 on failure)
 	totalCount, _ := a.store.ExecuteCountQuery(countSQL, countArgs)
@@ -887,6 +954,74 @@ func (a *App) GetDistinctValues(field string) (map[string]int64, error) {
 		return nil, fmt.Errorf("no database open")
 	}
 	return a.store.GetDistinctValues(field)
+}
+
+// buildBaseWhere constructs the WHERE clause and argument for a single base query predicate.
+// Mirrors query.Simple: LIKE and NOT LIKE operators wrap the value with % wildcards so that
+// GetFilteredDistinctValues and GetFilteredMinMaxDate match exactly what QueryEvents produces.
+func buildBaseWhere(d query.QueryDialect, baseField, baseOp, baseValue string) (whereClause string, arg interface{}) {
+	col := d.QuoteColumn(baseField)
+	ph := d.Placeholder(1)
+	switch baseOp {
+	case "LIKE", "NOT LIKE":
+		return fmt.Sprintf("%s %s %s", col, baseOp, ph), "%" + baseValue + "%"
+	default:
+		return fmt.Sprintf("%s %s %s", col, baseOp, ph), baseValue
+	}
+}
+
+// isValidModelField reports whether name is a known log2timeline column.
+func isValidModelField(name string) bool {
+	for _, f := range model.Fields {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+
+// GetFilteredDistinctValues returns distinct values for a field scoped to a base query (tab filter).
+// Used to populate filter dropdowns with only values relevant to the active tab's base query.
+func (a *App) GetFilteredDistinctValues(field, baseField, baseOp, baseValue string) (map[string]int64, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("no database open")
+	}
+	if !isValidModelField(field) {
+		return nil, fmt.Errorf("invalid field: %s", field)
+	}
+	if !isValidModelField(baseField) {
+		return nil, fmt.Errorf("invalid base field: %s", baseField)
+	}
+	switch baseOp {
+	case "=", "!=", "LIKE", "NOT LIKE":
+	default:
+		return nil, fmt.Errorf("invalid operator: %s", baseOp)
+	}
+	d := a.queryDialect()
+	whereClause, arg := buildBaseWhere(d, baseField, baseOp, baseValue)
+	return a.store.GetDistinctValuesFiltered(field, whereClause, []interface{}{arg})
+}
+
+// GetFilteredMinMaxDate returns the date range of events scoped to a base query (tab filter).
+func (a *App) GetFilteredMinMaxDate(baseField, baseOp, baseValue string) ([]string, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("no database open")
+	}
+	if !isValidModelField(baseField) {
+		return nil, fmt.Errorf("invalid base field: %s", baseField)
+	}
+	switch baseOp {
+	case "=", "!=", "LIKE", "NOT LIKE":
+	default:
+		return nil, fmt.Errorf("invalid operator: %s", baseOp)
+	}
+	d := a.queryDialect()
+	whereClause, arg := buildBaseWhere(d, baseField, baseOp, baseValue)
+	min, max, err := a.store.GetMinMaxDateFiltered(whereClause, []interface{}{arg})
+	if err != nil {
+		return nil, err
+	}
+	return []string{min, max}, nil
 }
 
 // GetMinMaxDate returns the date range of events in the database.
@@ -1296,6 +1431,166 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 		msg += fmt.Sprintf(" (%d examiner notes)", notesInserted)
 	}
 	return msg, nil
+}
+
+// -- Tab Settings --
+
+type appSettings struct {
+	TabLimit        int    `json:"tabLimit"`
+	AutoRestoreTabs bool   `json:"autoRestoreTabs"`
+	PostgresHost    string `json:"postgresHost"`
+}
+
+func appSettingsPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "4n6time", "settings.json")
+}
+
+// GetTabLimit returns the configured maximum number of tabs (default 5).
+func (a *App) GetTabLimit() int {
+	path := appSettingsPath()
+	if path == "" {
+		return 5
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 5
+	}
+	var s appSettings
+	if err := json.Unmarshal(data, &s); err != nil || s.TabLimit <= 0 {
+		return 5
+	}
+	return s.TabLimit
+}
+
+// SetTabLimit persists the maximum number of tabs to settings.json.
+func (a *App) SetTabLimit(limit int) error {
+	if limit < 1 {
+		limit = 1
+	}
+	path := appSettingsPath()
+	if path == "" {
+		return fmt.Errorf("could not determine config directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	var s appSettings
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &s)
+	}
+	s.TabLimit = limit
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
+	return nil
+}
+
+// SaveTabSession persists the tab session JSON to the database.
+// Passing an empty string clears any previously stored session.
+func (a *App) SaveTabSession(sessionJSON string) error {
+	if a.store == nil {
+		return nil
+	}
+	return a.store.SaveTabSession(sessionJSON)
+}
+
+// LoadTabSession retrieves the stored tab session JSON from the database.
+// Returns an empty string if no session has been saved.
+func (a *App) LoadTabSession() (string, error) {
+	if a.store == nil {
+		return "", nil
+	}
+	return a.store.LoadTabSession()
+}
+
+// GetAutoRestoreTabs returns the auto-restore tabs setting (default false).
+func (a *App) GetAutoRestoreTabs() bool {
+	path := appSettingsPath()
+	if path == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var s appSettings
+	if err := json.Unmarshal(data, &s); err != nil {
+		return false
+	}
+	return s.AutoRestoreTabs
+}
+
+// SetAutoRestoreTabs persists the auto-restore tabs preference to settings.json.
+func (a *App) SetAutoRestoreTabs(enabled bool) error {
+	path := appSettingsPath()
+	if path == "" {
+		return fmt.Errorf("could not determine config directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	var s appSettings
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &s)
+	}
+	s.AutoRestoreTabs = enabled
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
+	return nil
+}
+
+// GetPostgresHost returns the saved default PostgreSQL hostname, or "localhost" if unset.
+func (a *App) GetPostgresHost() string {
+	path := appSettingsPath()
+	if path == "" {
+		return "localhost"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "localhost"
+	}
+	var s appSettings
+	if err := json.Unmarshal(data, &s); err != nil || s.PostgresHost == "" {
+		return "localhost"
+	}
+	return s.PostgresHost
+}
+
+// SetPostgresHost persists the default PostgreSQL hostname to settings.json.
+func (a *App) SetPostgresHost(host string) error {
+	path := appSettingsPath()
+	if path == "" {
+		return fmt.Errorf("could not determine config directory")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	var s appSettings
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &s)
+	}
+	s.PostgresHost = host
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal settings: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("write settings: %w", err)
+	}
+	return nil
 }
 
 // -- Internal Helpers --

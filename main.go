@@ -39,7 +39,7 @@ func main() {
 	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(cd *menu.CallbackData) {
-		runtime.Quit(app.ctx)
+		runtime.EventsEmit(app.ctx, "menu:quit")
 	})
 
 	editMenu := appMenu.AddSubmenu("Edit")
@@ -59,6 +59,11 @@ func main() {
 	viewMenu := appMenu.AddSubmenu("View")
 	viewMenu.AddText("Theme...", keys.CmdOrCtrl("t"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:theme")
+	})
+
+	toolsMenu := appMenu.AddSubmenu("Tools")
+	toolsMenu.AddText("Settings...", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:settings")
 	})
 
 	helpMenu := appMenu.AddSubmenu("Help")
@@ -82,8 +87,9 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
+		OnStartup:       app.startup,
+		OnShutdown:      app.shutdown,
+		OnBeforeClose:   app.OnBeforeClose,
 		Bind: []interface{}{
 			app,
 		},

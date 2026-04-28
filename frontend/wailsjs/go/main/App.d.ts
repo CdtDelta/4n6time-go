@@ -29,13 +29,25 @@ export function EnableLogging():Promise<string>;
 
 export function ExportCSV(arg1:main.QueryRequest):Promise<string>;
 
+export function ForceQuit():Promise<void>;
+
+export function GetAutoRestoreTabs():Promise<boolean>;
+
 export function GetDistinctValues(arg1:string):Promise<Record<string, number>>;
+
+export function GetFilteredDistinctValues(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Record<string, number>>;
+
+export function GetFilteredMinMaxDate(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;
 
 export function GetLoggingStatus():Promise<main.LoggingStatus>;
 
 export function GetMinMaxDate():Promise<Array<string>>;
 
+export function GetPostgresHost():Promise<string>;
+
 export function GetSavedQueries():Promise<Array<database.SavedQuery>>;
+
+export function GetTabLimit():Promise<number>;
 
 export function GetTags():Promise<Array<string>>;
 
@@ -47,6 +59,8 @@ export function ImportCSV():Promise<main.DBInfo>;
 
 export function ImportEZToolsDirectory():Promise<main.DBInfo>;
 
+export function LoadTabSession():Promise<string>;
+
 export function OpenDatabase():Promise<main.DBInfo>;
 
 export function PushToPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
@@ -55,7 +69,15 @@ export function QueryEvents(arg1:main.QueryRequest):Promise<main.QueryResponse>;
 
 export function SaveQuery(arg1:string,arg2:string):Promise<void>;
 
+export function SaveTabSession(arg1:string):Promise<void>;
+
+export function SetAutoRestoreTabs(arg1:boolean):Promise<void>;
+
 export function SetLoggingPersist(arg1:boolean):Promise<void>;
+
+export function SetPostgresHost(arg1:string):Promise<void>;
+
+export function SetTabLimit(arg1:number):Promise<void>;
 
 export function ToggleBookmark(arg1:number):Promise<number>;
 

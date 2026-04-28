@@ -125,12 +125,42 @@ func (db *PostgresStore) migrate() {
 
 	// Create examiner_notes table if missing
 	db.conn.Exec(db.dialect.CreateExaminerNotesTableSQL())
+
+	// Create l2t_tab_sessions table if missing
+	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
 }
 
 // Migrate applies any pending schema migrations.
 func (db *PostgresStore) Migrate() error {
 	db.migrate()
 	return nil
+}
+
+// SaveTabSession stores tab session JSON. Deletes any existing row first.
+// Passing an empty string clears the stored session without inserting a new row.
+func (db *PostgresStore) SaveTabSession(data string) error {
+	_, err := db.conn.Exec("DELETE FROM l2t_tab_sessions")
+	if err != nil {
+		return fmt.Errorf("clear tab session: %w", err)
+	}
+	if data == "" {
+		return nil
+	}
+	_, err = db.conn.Exec("INSERT INTO l2t_tab_sessions (session_data) VALUES ($1)", data)
+	if err != nil {
+		return fmt.Errorf("save tab session: %w", err)
+	}
+	return nil
+}
+
+// LoadTabSession returns the stored session_data string, or empty string if no row exists.
+func (db *PostgresStore) LoadTabSession() (string, error) {
+	var data string
+	err := db.conn.QueryRow("SELECT session_data FROM l2t_tab_sessions LIMIT 1").Scan(&data)
+	if err != nil {
+		return "", nil
+	}
+	return data, nil
 }
 
 // InsertExaminerNote inserts a new examiner note and returns its negated ID.
@@ -585,6 +615,50 @@ func (db *PostgresStore) GetDistinctValues(fieldName string) (map[string]int64, 
 	}
 
 	return result, nil
+}
+
+// GetDistinctValuesFiltered returns distinct values and counts for a column, scoped to a WHERE clause.
+// Does not include examiner_notes data (scoped queries target log2timeline rows only).
+func (db *PostgresStore) GetDistinctValuesFiltered(fieldName, whereClause string, whereArgs []interface{}) (map[string]int64, error) {
+	if !isValidField(fieldName) {
+		return nil, fmt.Errorf("invalid field name: %s", fieldName)
+	}
+
+	col := pgQuoteCol(fieldName)
+	q := fmt.Sprintf(
+		"SELECT %s, COUNT(%s) FROM log2timeline WHERE %s GROUP BY %s",
+		col, col, whereClause, col)
+
+	rows, err := db.conn.Query(q, whereArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var value string
+		var count int64
+		if err := rows.Scan(&value, &count); err != nil {
+			return nil, err
+		}
+		if value != "" {
+			result[value] = count
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetMinMaxDateFiltered returns min/max datetime values scoped to a WHERE clause.
+// Uses to_char to produce consistent text format matching the rest of the codebase.
+func (db *PostgresStore) GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (minDate, maxDate string, err error) {
+	q := fmt.Sprintf(
+		`SELECT COALESCE(to_char(min(datetime), 'YYYY-MM-DD HH24:MI:SS'), ''),
+		        COALESCE(to_char(max(datetime), 'YYYY-MM-DD HH24:MI:SS'), '')
+		 FROM log2timeline WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND (%s)`,
+		whereClause)
+	err = db.conn.QueryRow(q, whereArgs...).Scan(&minDate, &maxDate)
+	return
 }
 
 // GetDistinctTags returns all unique tags from the events table.

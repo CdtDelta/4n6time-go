@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { GetDistinctValues, GetMinMaxDate } from '../../wailsjs/go/main/App'
+import { GetDistinctValues, GetMinMaxDate, GetFilteredDistinctValues, GetFilteredMinMaxDate } from '../../wailsjs/go/main/App'
 
-function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion }) {
+function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion, baseQuery }) {
   const [filters, setFilters] = useState([])
   const [logic, setLogic] = useState('AND')
   const [dateFrom, setDateFrom] = useState('')
@@ -38,9 +38,13 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
       const values = {}
       for (const f of filterFields) {
         try {
-          const result = await GetDistinctValues(f.field)
+          let result
+          if (baseQuery) {
+            result = await GetFilteredDistinctValues(f.field, baseQuery.field, baseQuery.op, baseQuery.value)
+          } else {
+            result = await GetDistinctValues(f.field)
+          }
           if (!cancelled && result) {
-            // result is a map of value -> count, get sorted keys
             values[f.field] = Object.keys(result).sort()
           }
         } catch (err) {
@@ -51,15 +55,20 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
       if (!cancelled) {
         setDistinctValues(values)
 
-        // Load date range defaults only if no external date range is active
-        // (e.g. from a histogram selection that triggered the panel to open)
-        if (!activeFilters?.dateFrom && !activeFilters?.dateTo) {
+        // For the main tab (no base query), always load the full DB date range.
+        // For scoped tabs, preserve any externally set date range (e.g. histogram selection).
+        if (!baseQuery || (!activeFilters?.dateFrom && !activeFilters?.dateTo)) {
           try {
-            const dates = await GetMinMaxDate()
+            let dates
+            if (baseQuery) {
+              dates = await GetFilteredMinMaxDate(baseQuery.field, baseQuery.op, baseQuery.value)
+            } else {
+              dates = await GetMinMaxDate()
+            }
             if (dates && dates.length === 2) {
               if (!cancelled) {
-                setDateFrom(prev => prev || dates[0])
-                setDateTo(prev => prev || dates[1])
+                setDateFrom(dates[0])
+                setDateTo(dates[1])
               }
             }
           } catch (err) {
@@ -73,7 +82,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
 
     loadValues()
     return () => { cancelled = true }
-  }, [visible, dbInfo, filterVersion, activeFilters])
+  }, [visible, dbInfo, filterVersion, activeFilters, baseQuery])
 
   const addFilter = useCallback(() => {
     setFilters(prev => [...prev, { field: 'source', operator: '=', value: '' }])

@@ -79,6 +79,9 @@ export namespace main {
 	    pageSize: number;
 	    searchText: string;
 	    bookmarkOnly: boolean;
+	    baseField: string;
+	    baseOp: string;
+	    baseValue: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryRequest(source);
@@ -93,6 +96,9 @@ export namespace main {
 	        this.pageSize = source["pageSize"];
 	        this.searchText = source["searchText"];
 	        this.bookmarkOnly = source["bookmarkOnly"];
+	        this.baseField = source["baseField"];
+	        this.baseOp = source["baseOp"];
+	        this.baseValue = source["baseValue"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -73,4 +73,8 @@ type Dialect interface {
 
 	// InsertExaminerNoteSQL returns the parameterized INSERT statement for a single examiner note.
 	InsertExaminerNoteSQL() string
+
+	// CreateTabSessionsTableSQL returns DDL for the l2t_tab_sessions table.
+	// This table stores at most one row: the serialized tab session JSON.
+	CreateTabSessionsTableSQL() string
 }

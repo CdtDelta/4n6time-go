@@ -11,11 +11,13 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 - Import L2T CSV, Plaso JSONL, TLN, L2TTLN, dynamic CSV, and **EZ Tools CSV** files (tested with 2GB+ files, millions of events)
 - **EZ Tools CSV import**: auto-detect and import output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd) with multi-timestamp expansion
 - **Import EZ Tools Folder**: batch import all CSVs from a tool output directory
+- **Tab system**: right-click any event to open a filtered view in a new tab; each tab has independent filters, search, and pagination; tab sessions persist per-database and are restored on next open
 - **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
 - **Examiner notes**: add timestamped investigation notes directly into the timeline grid alongside evidence events
 - **Advanced search**: toggle between keyword search and SQL WHERE clause mode with full query syntax
 - **Bulk select and edit**: shift-click or ctrl-click to select multiple rows, then apply color, tags, or bookmarks to all at once
 - **Multi-import**: import additional timeline files into an already-open database to combine evidence sources
+- **Settings** (Tools > Settings): configure tab limit, auto-restore, and default PostgreSQL hostname
 - Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
 - Filter panel with AND/OR logic, date range, and multi-field filters
@@ -108,6 +110,15 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 7. Use **Columns** to show or hide fields in the grid
 8. Use **Export CSV** to save filtered results
 9. Change the UI theme via **View > Theme** (Ctrl+T)
+
+### Tab System
+
+Right-click any row in the event grid to open a context menu with "Search in new tab" options for key fields (host, user, source, filename, and more). Each tab maintains its own independent filters, search, and pagination — the original tab is unchanged.
+
+- Tabs can be saved to the Saved Queries list using the save icon on the tab; loading a saved tab query reopens it in a new tab
+- When data is modified in one tab (color change, bookmark, etc.), other tabs show a stale indicator dot and can be refreshed with the refresh button
+- Tab sessions are saved when you close the database or application; on next open you are prompted to restore them (or they restore automatically if auto-restore is enabled)
+- Configure the tab limit (default 5) and auto-restore behavior via **Tools > Settings**
 
 ### Examiner Notes
 

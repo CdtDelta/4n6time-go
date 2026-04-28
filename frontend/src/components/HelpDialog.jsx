@@ -6,7 +6,7 @@ const helpSections = [
     title: 'Getting Started',
     content: `4n6time is a forensic timeline analysis tool that helps investigators view, filter, and analyze digital forensic timelines.
 
-To begin, you can either open an existing database, import a timeline file, or connect to a PostgreSQL server:
+To begin, you can either open an existing database, import a timeline file, or connect to a PostgreSQL server. Once data is loaded, right-click any event row to open related events in a new tab for side-by-side investigation.
 
 Open Database: Opens a previously created SQLite database file (.db). Use File > Open Database or the Open button in the toolbar.
 
@@ -112,7 +112,41 @@ To load a query: Click on a saved query name to apply its filters immediately.
 
 To delete a query: Click the delete button next to the query name.
 
-Saved queries are stored per-database, so each database has its own set of saved queries.`
+Saved queries are stored per-database, so each database has its own set of saved queries.
+
+Tab queries: When a tab has a base query (opened via right-click), a save icon appears on the tab. Clicking it lets you name and save that tab's filter as a saved query. When you later load a saved tab query from the Saved Queries panel, it opens in a new tab rather than replacing the current view.`
+  },
+  {
+    id: 'tabs',
+    title: 'Tab System',
+    content: `The tab system lets you open multiple filtered views of your data simultaneously, each with independent filters, search, and pagination.
+
+Opening a new tab: Right-click any row in the event grid to open the context menu. Select a field value from the "Search in new tab" options. A new tab opens filtered to events matching that value. Available fields include filename, host, user, source, sourcetype, description, URL, computer name, event identifier, and source name. The original tab is unchanged.
+
+Tab behavior: Each tab maintains its own filter state, search term, pagination position, and date range. Switching tabs restores the exact state you left. The filter panel's dropdown values are scoped to that tab's base query, so you see only values present in that tab's data.
+
+Saving tab queries: When a tab has a base query, a save icon (floppy disk) appears on the tab bar. Click it to save the tab's filter as a named saved query. Loading that saved query later opens it in a new tab.
+
+Stale data indicator: When you modify data in one tab (change a color, toggle a bookmark, edit a field), other tabs show a dot on their tab label indicating their data may be out of date. Click the Refresh button that appears on those tabs to reload their data.
+
+Session persistence: When you close a database or the application, your open tabs are saved. The next time you open the same database, you are prompted to restore the saved tabs. Click Restore to reopen them or Dismiss to start fresh. If auto-restore is enabled in Settings, tabs restore automatically without the prompt.
+
+Tab limit: The maximum number of tabs is configurable via Tools > Settings (default 5). If you reach the limit, close a tab before opening a new one, or increase the limit in Settings.
+
+Close confirmation: When you close the application with a database open, a confirmation dialog appears. Clicking Close saves your tab session and exits. Clicking Cancel keeps the application open.`
+  },
+  {
+    id: 'settings',
+    title: 'Settings',
+    content: `The Settings dialog (Tools > Settings) provides centralized configuration for application preferences.
+
+Max open tabs: The maximum number of tabs that can be open at once. Default is 5. Range is 1 to 20. When the limit is reached, close an existing tab before opening a new one. Applies immediately on save.
+
+Auto-restore tabs: When enabled, open tabs are automatically restored the next time you open the same database, without showing the restore prompt. When disabled (default), a notification bar appears offering to restore tabs. You can restore or dismiss it.
+
+Default PostgreSQL hostname: Pre-fills the Host field in the PostgreSQL connection dialog each time it opens. Useful if you always connect to the same server. Leave blank to use "localhost" as the default. Save your changes and the next time you open the PostgreSQL dialog, the host field will be pre-filled.
+
+To open Settings: Use the menu Tools > Settings.`
   },
   {
     id: 'columns',

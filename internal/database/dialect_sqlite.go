@@ -98,3 +98,10 @@ func (d *SQLiteDialect) CreateExaminerNotesTableSQL() string {
 func (d *SQLiteDialect) InsertExaminerNoteSQL() string {
 	return `INSERT INTO examiner_notes (datetime, description, tag, color, bookmark) VALUES (?, ?, ?, ?, ?)`
 }
+
+func (d *SQLiteDialect) CreateTabSessionsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_tab_sessions (
+		id INTEGER PRIMARY KEY,
+		session_data TEXT
+	)`
+}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetSavedQueries, SaveQuery, DeleteSavedQuery } from '../../wailsjs/go/main/App'
 
-function SavedQueries({ visible, onLoad, currentFilters, dbInfo }) {
+function SavedQueries({ visible, onLoad, onOpenInNewTab, currentFilters, dbInfo }) {
   const [queries, setQueries] = useState([])
   const [saveName, setSaveName] = useState('')
   const [loading, setLoading] = useState(false)
@@ -59,12 +59,21 @@ function SavedQueries({ visible, onLoad, currentFilters, dbInfo }) {
   const handleLoad = useCallback((queryStr) => {
     try {
       const filterState = JSON.parse(queryStr)
-      onLoad(filterState)
+      if (filterState.tabQuery === true && onOpenInNewTab) {
+        onOpenInNewTab({
+          field: filterState.field,
+          op: filterState.op,
+          value: filterState.value,
+          label: filterState.label,
+        })
+      } else {
+        onLoad(filterState)
+      }
     } catch (err) {
       console.error('Error parsing saved query:', err)
       setError('Could not parse saved query')
     }
-  }, [onLoad])
+  }, [onLoad, onOpenInNewTab])
 
   const handleDelete = useCallback(async (name) => {
     try {
@@ -113,9 +122,13 @@ function SavedQueries({ visible, onLoad, currentFilters, dbInfo }) {
 
         {queries.map(q => {
           let summary = ''
+          let isTabQuery = false
           try {
             const parsed = JSON.parse(q.Query)
-            if (parsed.advanced && parsed.whereClause) {
+            if (parsed.tabQuery === true) {
+              isTabQuery = true
+              summary = `${parsed.field} ${parsed.op} ${parsed.value}`
+            } else if (parsed.advanced && parsed.whereClause) {
               const clause = parsed.whereClause
               summary = 'SQL: ' + (clause.length > 40 ? clause.substring(0, 40) + '...' : clause)
             } else {
@@ -136,9 +149,12 @@ function SavedQueries({ visible, onLoad, currentFilters, dbInfo }) {
           }
 
           return (
-            <div key={q.Name} className="sq-item">
+            <div key={q.Name} className={`sq-item${isTabQuery ? ' sq-item-tab' : ''}`}>
               <div className="sq-item-info" onClick={() => handleLoad(q.Query)}>
-                <span className="sq-item-name">{q.Name}</span>
+                <span className="sq-item-name">
+                  {isTabQuery && <span className="sq-tab-badge">Tab</span>}
+                  {q.Name}
+                </span>
                 <span className="sq-item-summary">{summary}</span>
               </div>
               <button className="sq-item-delete" onClick={() => handleDelete(q.Name)}>x</button>

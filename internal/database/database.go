@@ -43,6 +43,9 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 
 	db := &SQLiteStore{path: path, conn: conn, dialect: d}
 
+	// Retry up to 5 seconds on SQLITE_BUSY instead of failing immediately.
+	db.conn.Exec("PRAGMA busy_timeout = 5000")
+
 	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
 	db.migrate()
 
@@ -62,6 +65,36 @@ func (db *SQLiteStore) migrate() {
 
 	// Create examiner_notes table if missing
 	db.conn.Exec(db.dialect.CreateExaminerNotesTableSQL())
+
+	// Create l2t_tab_sessions table if missing
+	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
+}
+
+// SaveTabSession stores tab session JSON. Deletes any existing row first.
+// Passing an empty string clears the stored session without inserting a new row.
+func (db *SQLiteStore) SaveTabSession(data string) error {
+	_, err := db.conn.Exec("DELETE FROM l2t_tab_sessions")
+	if err != nil {
+		return fmt.Errorf("clear tab session: %w", err)
+	}
+	if data == "" {
+		return nil
+	}
+	_, err = db.conn.Exec("INSERT INTO l2t_tab_sessions (session_data) VALUES (?)", data)
+	if err != nil {
+		return fmt.Errorf("save tab session: %w", err)
+	}
+	return nil
+}
+
+// LoadTabSession returns the stored session_data string, or empty string if no row exists.
+func (db *SQLiteStore) LoadTabSession() (string, error) {
+	var data string
+	err := db.conn.QueryRow("SELECT session_data FROM l2t_tab_sessions LIMIT 1").Scan(&data)
+	if err != nil {
+		return "", nil
+	}
+	return data, nil
 }
 
 // ToggleBookmark toggles the bookmark flag on an event and returns the new value.
@@ -94,6 +127,9 @@ func CreateSQLite(path string, indexFields []string) (*SQLiteStore, error) {
 	}
 
 	db := &SQLiteStore{path: path, conn: conn, dialect: d}
+
+	// Retry up to 5 seconds on SQLITE_BUSY instead of failing immediately.
+	db.conn.Exec("PRAGMA busy_timeout = 5000")
 
 	if err := db.createSchema(indexFields); err != nil {
 		conn.Close()
@@ -364,6 +400,46 @@ func (db *SQLiteStore) GetDistinctValues(fieldName string) (map[string]int64, er
 	}
 
 	return result, nil
+}
+
+// GetDistinctValuesFiltered returns distinct values and counts for a column, scoped to a WHERE clause.
+// Does not include examiner_notes data (scoped queries target log2timeline rows only).
+func (db *SQLiteStore) GetDistinctValuesFiltered(fieldName, whereClause string, whereArgs []interface{}) (map[string]int64, error) {
+	if !isValidField(fieldName) {
+		return nil, fmt.Errorf("invalid field name: %s", fieldName)
+	}
+
+	q := fmt.Sprintf(
+		"SELECT %s, COUNT(%s) FROM log2timeline WHERE %s GROUP BY %s",
+		fieldName, fieldName, whereClause, fieldName)
+
+	rows, err := db.conn.Query(q, whereArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]int64)
+	for rows.Next() {
+		var value string
+		var count int64
+		if err := rows.Scan(&value, &count); err != nil {
+			return nil, err
+		}
+		if value != "" {
+			result[value] = count
+		}
+	}
+	return result, rows.Err()
+}
+
+// GetMinMaxDateFiltered returns min/max datetime values scoped to a WHERE clause.
+func (db *SQLiteStore) GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (minDate, maxDate string, err error) {
+	q := fmt.Sprintf(
+		"SELECT COALESCE(min(datetime), ''), COALESCE(max(datetime), '') FROM log2timeline WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND (%s)",
+		whereClause)
+	err = db.conn.QueryRow(q, whereArgs...).Scan(&minDate, &maxDate)
+	return
 }
 
 // GetDistinctTags returns all unique tags from the events table.
@@ -899,21 +975,35 @@ func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []inte
 // examiner notes should be excluded from the UNION. Returns true if no source
 // filter is present, source equals 'EXAMINER', or the filter cannot be determined.
 func shouldIncludeExaminerNotes(sqlStr string) bool {
-	// Look for patterns like: source = 'VALUE' or source='VALUE' (case-insensitive)
+	// Parameterized queries signal note exclusion via a comment marker injected
+	// by app.go when the base query field is not one that examiner notes have.
+	if strings.Contains(sqlStr, "/* no-notes */") {
+		return false
+	}
+
+	// Advanced search passes raw SQL with literal values. Look for source = 'VALUE'
+	// (case-insensitive) to detect source-filtered queries.
 	re := regexp.MustCompile(`(?i)\bsource\s*=\s*'([^']*)'`)
 	matches := re.FindAllStringSubmatch(sqlStr, -1)
-	if len(matches) == 0 {
-		// No source equality filter found; include examiner notes
-		return true
-	}
-	// If any source filter matches 'EXAMINER', include notes
-	for _, m := range matches {
-		if strings.EqualFold(m[1], "EXAMINER") {
-			return true
+	if len(matches) > 0 {
+		// If any source filter matches 'EXAMINER', include notes
+		for _, m := range matches {
+			if strings.EqualFold(m[1], "EXAMINER") {
+				return true
+			}
 		}
+		// Source is filtered to something other than EXAMINER; exclude notes
+		return false
 	}
-	// Source is filtered to something other than EXAMINER; exclude notes
-	return false
+
+	// Exclude notes when the advanced search explicitly filters out EXAMINER
+	reNotEq := regexp.MustCompile(`(?i)\bsource\s*(!=|<>)\s*'EXAMINER'`)
+	if reNotEq.MatchString(sqlStr) {
+		return false
+	}
+
+	// No source filter found; include examiner notes
+	return true
 }
 
 // wrapWithExaminerNotesUnion takes a query.Build() output and injects a UNION ALL
