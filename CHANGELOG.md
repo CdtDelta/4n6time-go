@@ -2,6 +2,28 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## [0.13.0] - 2026-05-14
+
+### Features
+
+- Recursive folder import for KAPE and EZ Tools output. Replaces the flat "Import EZ Tools Folder" workflow. Walks the selected folder up to 3 levels deep, detects supported CSV formats per file, and presents a post-import summary dialog with per-tool counts and a collapsible list of skipped files. Help dialog documents the depth limit and supported tools.
+
+### Bug fixes
+
+- Histogram click and drag-select now correctly update the From/To date range fields in the filter panel.
+- Histogram fetch now respects the keyword search box and the bookmark-only toggle, in addition to date range and filter panel filters. Grid and histogram cannot drift out of sync.
+- Histogram now refetches correctly when switching between tabs. Filtered tabs no longer show stale data from a previously-active tab.
+- Advanced SQL search mode now correctly filters the histogram on both SQLite and PostgreSQL.
+- Examiner notes now respect the bookmark-only filter and the date range filter. Previously, examiner notes outside the filtered date range or that were not bookmarked would still appear in the grid and histogram.
+- PostgreSQL connection now correctly handles passwords containing special characters (@, #, %, :, /, and others) via percent-encoding. Fixes the Connect, Create & Connect, and Push to PostgreSQL paths.
+
+### Internal
+
+- Per-tab UI state consolidated into a single savedState object on each tab, replacing scattered individual fields. New applyTabState helper centralizes state restoration. New buildTabSessionJSON helper centralizes session save construction. New liveTabStateRef captures in-progress state for close-time saves.
+- Separated tabSwitchingRef (grid concerns) and histogramSuppressRef (histogram concerns) to prevent the histogram from being permanently silenced by ref state held during database open or session restore.
+- New NotesFilter struct on the Store interface allows the examiner notes side of UNION queries to receive a field-mapped subset of the active filter set. ExecuteQuery and ExecuteCountQuery now accept an optional *NotesFilter parameter.
+- GitHub Actions release workflow now generates and uploads SHA256SUMS.txt alongside binary release artifacts.
+
 ## [0.12.0] - 2026-04-28
 
 ### Added
