@@ -41,6 +41,9 @@ vendor/
 # Claude
 CLAUDE.md
 .claude/
+MEMORY/
+WORK/
+nimbalyst/
 
 # Document folders
 Plans/
