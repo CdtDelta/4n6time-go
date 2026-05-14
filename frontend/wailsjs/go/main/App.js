@@ -62,6 +62,10 @@ export function GetAutoRestoreTabs() {
   return window['go']['main']['App']['GetAutoRestoreTabs']();
 }
 
+export function GetCurrentDBInfo() {
+  return window['go']['main']['App']['GetCurrentDBInfo']();
+}
+
 export function GetDistinctValues(arg1) {
   return window['go']['main']['App']['GetDistinctValues'](arg1);
 }
@@ -110,8 +114,8 @@ export function ImportCSV() {
   return window['go']['main']['App']['ImportCSV']();
 }
 
-export function ImportEZToolsDirectory() {
-  return window['go']['main']['App']['ImportEZToolsDirectory']();
+export function ImportFolderRecursive() {
+  return window['go']['main']['App']['ImportFolderRecursive']();
 }
 
 export function LoadTabSession() {

@@ -8,6 +8,14 @@ type TimelineBucket struct {
 	Count     int64  `json:"count"`
 }
 
+// NotesFilter carries the WHERE clause and parameter values applied to the examiner_notes
+// side of a UNION ALL query. Column names must be native examiner_notes names
+// (e.g. "description" rather than "desc"). Use nil to apply no filter to notes.
+type NotesFilter struct {
+	SQL  string
+	Args []interface{}
+}
+
 // Store defines the interface for all database operations.
 // Every method that the application needs is captured here so that
 // app.go depends on the interface, not on a concrete database type.
@@ -22,8 +30,10 @@ type Store interface {
 
 	// Query execution for pre-built SQL (from query.go Build).
 	// The scan order matches model.Fields: rowid, datetime, timezone, MACB, ...
-	ExecuteQuery(sql string, args []interface{}) ([]*model.Event, error)
-	ExecuteCountQuery(sql string, args []interface{}) (int64, error)
+	// notesFilter, when non-nil, applies a WHERE clause to the examiner_notes side
+	// of the UNION ALL so the two result sets stay consistent with the main filters.
+	ExecuteQuery(sql string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error)
+	ExecuteCountQuery(sql string, args []interface{}, notesFilter *NotesFilter) (int64, error)
 
 	// Metadata and filters
 	GetDistinctValues(field string) (map[string]int64, error)

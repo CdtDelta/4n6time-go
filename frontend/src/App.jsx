@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, ImportEZToolsDirectory, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
+import { OpenDatabase, ImportCSV, ImportFolderRecursive, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import PostgresDialog from './components/PostgresDialog'
 import FilterPanel from './components/FilterPanel'
@@ -19,6 +19,7 @@ import AddNoteDialog from './components/AddNoteDialog'
 import HighlightText from './components/HighlightText'
 import TabBar from './components/TabBar'
 import SettingsDialog from './components/SettingsDialog'
+import RecursiveImportSummaryDialog from './components/RecursiveImportSummaryDialog'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
@@ -31,21 +32,47 @@ const makeTab = (id, label, baseQuery = null) => ({
   isMain: id === MAIN_TAB_ID,
   baseQuery,    // { field, op, value } | null
   stale: false,
-  savedPage: 1,
-  savedSearch: '',
-  savedSearchMode: 'simple',
-  savedSearchText: '',
-  savedScrollRow: 0,
-  savedFilters: null,  // per-tab activeFilters snapshot
+  // savedState groups all per-tab UI fields. applyTabState() is the single reader;
+  // handleTabClick/handleTabClose/handleOpenInNewTab are the writers.
+  // Adding new per-tab state requires touching only: (1) this shape, (2) applyTabState, (3) the save call.
+  savedState: {
+    page: 1,
+    search: '',
+    searchMode: 'simple',
+    searchText: '',
+    scrollRow: 0,
+    filters: null,
+    bookmarkOnly: false,
+  },
 })
 
+// Read a tab's savedState, accepting either the new object shape or the legacy flat fields
+// (savedPage, savedSearch, etc.) from sessions persisted before this refactor.
+const getTabSavedState = (tab) => {
+  if (tab.savedState) return tab.savedState
+  return {
+    page: tab.savedPage || 1,
+    search: tab.savedSearch || '',
+    searchMode: tab.savedSearchMode || 'simple',
+    searchText: tab.savedSearchText || '',
+    scrollRow: tab.savedScrollRow || 0,
+    filters: tab.savedFilters || null,
+    bookmarkOnly: false,
+  }
+}
+
 // Serialize non-main tabs into session JSON for SaveTabSession.
+// activeTabLiveState is passed separately because the active tab's savedState is only written
+// on tab switches; at close time the live values are in React state, not on the tab object.
 // Returns empty string when only the main tab is open (signals "clear session").
-const buildTabSessionJSON = (tabs, activeTabId) => {
+const buildTabSessionJSON = (tabs, activeTabId, activeTabLiveState) => {
   const nonMain = tabs.filter(t => !t.isMain)
   if (nonMain.length === 0) return ''
   return JSON.stringify({
-    tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })),
+    tabs: nonMain.map(t => {
+      const ss = t.id === activeTabId ? activeTabLiveState : getTabSavedState(t)
+      return { id: t.id, label: t.label, baseQuery: t.baseQuery, savedState: ss }
+    }),
     activeTabId,
   })
 }
@@ -122,6 +149,8 @@ function App() {
   const [showHelp, setShowHelp] = useState(false)
   const [showLogging, setShowLogging] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showRecursiveSummary, setShowRecursiveSummary] = useState(false)
+  const [recursiveSummary, setRecursiveSummary] = useState(null)
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
   const [showAddNote, setShowAddNote] = useState(false)
@@ -151,9 +180,12 @@ function App() {
   const resizingRef = useRef(false)
   // Holds the active tab's baseQuery for use in loadPage without adding to deps
   const activeBaseQueryRef = useRef(null)
-  // Suppresses the [activeSearch] effect during tab switches so the new tab's
+  // Suppresses the [activeSearch] and [bookmarkOnly] effects during tab switches so the new tab's
   // saved search state doesn't trigger an extraneous loadPage(1) for the old tab.
   const tabSwitchingRef = useRef(false)
+  // Suppresses the TimelineChart histogram fetch during user-initiated tab switches only.
+  // NOT set during handleRestoreTabSession so the histogram loads immediately on database open.
+  const histogramSuppressRef = useRef(false)
   // Scroll row to restore after the next [events] update (tab switch).
   const pendingScrollRowRef = useRef(0)
   // Signals that the next [events] update should scroll to row 0 (page navigation).
@@ -162,11 +194,17 @@ function App() {
   const tabsRef = useRef([makeTab(MAIN_TAB_ID, 'All Events')])
   const activeTabIdRef = useRef(MAIN_TAB_ID)
   const dbInfoRef = useRef(null)
+  // Continuously updated snapshot of the active tab's live state. Used when building session
+  // JSON at close time, because the tab object's savedState is only written during tab switches.
+  const liveTabStateRef = useRef({ page: 1, search: '', searchMode: 'simple', searchText: '', filters: null, bookmarkOnly: false })
 
   // Pending session loaded from DB — shown in notification bar for manual restore.
   const [pendingSession, setPendingSession] = useState(null)
   // True when the user clicked the window close button — shows the confirm dialog.
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
+  // Bumped by the [activeTabId] effect after each tab switch completes.
+  // Passed to TimelineChart so its suppressed effect re-fires with the final state.
+  const [histogramVersion, setHistogramVersion] = useState(0)
 
   // Apply theme CSS variables to document root
   const applyTheme = useCallback((themeId) => {
@@ -194,6 +232,9 @@ function App() {
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
   useEffect(() => { dbInfoRef.current = dbInfo }, [dbInfo])
+  useEffect(() => {
+    liveTabStateRef.current = { page: currentPage, search: activeSearch, searchMode, searchText, filters: activeFilters, bookmarkOnly }
+  }, [currentPage, activeSearch, searchMode, searchText, activeFilters, bookmarkOnly])
 
   // Load version and tab limit on mount
   useEffect(() => {
@@ -319,18 +360,45 @@ function App() {
     }
   }, [dbInfo, buildQueryRequest, activeFilters, searchMode, activeSearch])
 
+  // Apply a tab's savedState to active React state. This is the only place these setStates
+  // live for tab-swap purposes. User-initiated switch callers set tabSwitchingRef.current and
+  // histogramSuppressRef.current = true before calling, then call setActiveTabId() after;
+  // the [activeTabId] effect clears both flags and triggers loadPage.
+  const applyTabState = useCallback((tab) => {
+    const s = getTabSavedState(tab)
+    activeBaseQueryRef.current = tab.baseQuery || null
+    setCurrentPage(s.page)
+    setActiveSearch(s.search)
+    setSearchMode(s.searchMode)
+    setSearchText(s.searchText)
+    setSearchError('')
+    setActiveFilters(s.filters)
+    setBookmarkOnly(s.bookmarkOnly)
+    pendingScrollRowRef.current = s.scrollRow
+    setSelectedEvent(null)
+    setSelectedEvents([])
+  }, [])
+
   const handleRestoreTabSession = useCallback((sessionData) => {
     try {
       const { tabs: savedTabs, activeTabId: savedActiveId } = JSON.parse(sessionData)
       if (!Array.isArray(savedTabs) || savedTabs.length === 0) return
-      const restored = savedTabs.map(t => makeTab(t.id, t.label, t.baseQuery || null))
+      const restored = savedTabs.map(t => {
+        const tab = makeTab(t.id, t.label, t.baseQuery || null)
+        // Merge savedState from session if present (new shape); legacy sessions have none.
+        if (t.savedState) tab.savedState = { ...tab.savedState, ...t.savedState }
+        return tab
+      })
       setTabs([makeTab(MAIN_TAB_ID, 'All Events'), ...restored])
       const targetId = savedActiveId || restored[0].id
+      const targetTab = restored.find(t => t.id === targetId) || restored[0]
+      tabSwitchingRef.current = true
+      // histogramSuppressRef is intentionally NOT set here. During session restore the
+      // histogram should load immediately. Only user-initiated tab switches suppress it.
+      applyTabState(targetTab)
       setActiveTabId(targetId)
-      const targetTab = restored.find(t => t.id === targetId)
-      activeBaseQueryRef.current = targetTab?.baseQuery || null
-    } catch { /* malformed JSON — ignore */ }
-  }, [])
+    } catch { /* malformed JSON */ }
+  }, [applyTabState])
 
   const handleDismissSession = useCallback(() => {
     SaveTabSession('').catch(() => {})
@@ -441,18 +509,23 @@ function App() {
     }
   }, [loadPage, handleRestoreTabSession])
 
-  const handleImportEZToolsDir = useCallback(async () => {
+  const handleImportFolderRecursive = useCallback(async () => {
     try {
       setImporting(true)
-      setStatus('Importing EZ Tools folder...')
-      const info = await ImportEZToolsDirectory()
-      if (info) {
-        setDbInfo(info)
-        setActiveFilters(null)
-        setShowFilters(false)
-        setSelectedEvent(null)
-        setStatus(`Imported: ${info.eventCount.toLocaleString()} events`)
-        await loadPage(1, info, null)
+      setStatus('Importing folder (recursive)...')
+      const summary = await ImportFolderRecursive()
+      if (summary) {
+        const info = await GetCurrentDBInfo()
+        if (info) {
+          setDbInfo(info)
+          setActiveFilters(null)
+          setShowFilters(false)
+          setSelectedEvent(null)
+          setStatus(`Imported: ${summary.totalEvents.toLocaleString()} events from ${summary.totalFilesProcessed} files`)
+          await loadPage(1, info, null)
+        }
+        setRecursiveSummary(summary)
+        setShowRecursiveSummary(true)
       } else {
         setStatus('')
       }
@@ -465,14 +538,9 @@ function App() {
 
   const handleCloseDB = useCallback(async () => {
     try {
-      // Save non-main tabs before closing; empty string clears if main-only.
-      const nonMain = tabsRef.current.filter(t => !t.isMain)
-      if (nonMain.length > 0) {
-        const sessionData = JSON.stringify({ tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })), activeTabId: activeTabIdRef.current })
-        await SaveTabSession(sessionData).catch(() => {})
-      } else {
-        await SaveTabSession('').catch(() => {})
-      }
+      // Save per-tab state; empty string clears if main-only.
+      const sessionData = buildTabSessionJSON(tabsRef.current, activeTabIdRef.current, liveTabStateRef.current)
+      await SaveTabSession(sessionData).catch(() => {})
       await CloseDatabase()
       dbInfoRef.current = null
       setDbInfo(null)
@@ -585,6 +653,7 @@ function App() {
 
   // Reload when bookmarkOnly filter changes
   useEffect(() => {
+    if (tabSwitchingRef.current) return
     if (dbInfo) {
       loadPage(1)
     }
@@ -593,9 +662,13 @@ function App() {
   // Reload when active tab changes (new baseQuery takes effect)
   useEffect(() => {
     tabSwitchingRef.current = false
+    histogramSuppressRef.current = false
     if (dbInfo) {
       const tab = tabs.find(t => t.id === activeTabId)
-      loadPage(tab?.savedPage || 1)
+      const page = tab ? getTabSavedState(tab).page : 1
+      loadPage(page)
+      // Signal TimelineChart to re-fetch now that the switch is complete and the flag is cleared.
+      setHistogramVersion(prev => prev + 1)
     }
   }, [activeTabId]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -842,60 +915,35 @@ function App() {
     const newTab = tabs.find(t => t.id === tabId)
     if (!newTab) return
 
-    // Suppress the [activeSearch] effect while we swap state between tabs.
     tabSwitchingRef.current = true
+    histogramSuppressRef.current = true
 
-    // Snapshot the outgoing tab's scroll position before the grid changes.
+    // Snapshot scroll position before the grid changes.
     const firstRow = gridRef.current?.api?.getFirstDisplayedRow?.() ?? 0
 
-    // Save current page, search state, filters, and scroll row to the leaving tab.
+    // Save all outgoing tab state under savedState.
     setTabs(prev => prev.map(t => t.id === activeTabId ? {
       ...t,
-      savedPage: currentPage,
-      savedSearch: activeSearch,
-      savedSearchMode: searchMode,
-      savedSearchText: searchText,
-      savedScrollRow: firstRow,
-      savedFilters: activeFilters,
+      savedState: { page: currentPage, search: activeSearch, searchMode, searchText, scrollRow: firstRow, filters: activeFilters, bookmarkOnly },
     } : t))
 
-    // Update the base query ref immediately (before the render/effect)
-    activeBaseQueryRef.current = newTab.baseQuery || null
-    setCurrentPage(newTab.savedPage || 1)
-    setActiveSearch(newTab.savedSearch || '')
-    setSearchMode(newTab.savedSearchMode || 'simple')
-    setSearchText(newTab.savedSearchText || '')
-    setSearchError('')
-    setActiveFilters(newTab.savedFilters || null)
-    pendingScrollRowRef.current = newTab.savedScrollRow || 0
-    setSelectedEvent(null)
-    setSelectedEvents([])
+    applyTabState(newTab)
     setActiveTabId(tabId)
-  }, [activeTabId, tabs, currentPage, dbInfo, activeSearch, searchMode, searchText, activeFilters])
+  }, [activeTabId, tabs, currentPage, dbInfo, activeSearch, searchMode, searchText, activeFilters, bookmarkOnly, applyTabState])
 
   const handleTabClose = useCallback((tabId) => {
     const idx = tabs.findIndex(t => t.id === tabId)
-    const newTabs = tabs.filter(t => t.id !== tabId)
     const prevTab = tabs[idx - 1] || tabs[0]
-    const newActiveId = tabId === activeTabId ? (prevTab?.id || MAIN_TAB_ID) : activeTabId
 
     setTabs(prev => prev.filter(t => t.id !== tabId))
 
     if (tabId === activeTabId) {
       tabSwitchingRef.current = true
-      activeBaseQueryRef.current = prevTab?.baseQuery || null
-      setCurrentPage(prevTab?.savedPage || 1)
-      setActiveSearch(prevTab?.savedSearch || '')
-      setSearchMode(prevTab?.savedSearchMode || 'simple')
-      setSearchText(prevTab?.savedSearchText || '')
-      setSearchError('')
-      setActiveFilters(prevTab?.savedFilters || null)
-      pendingScrollRowRef.current = prevTab?.savedScrollRow || 0
-      setSelectedEvent(null)
-      setSelectedEvents([])
+      histogramSuppressRef.current = true
+      applyTabState(prevTab)
       setActiveTabId(prevTab?.id || MAIN_TAB_ID)
     }
-  }, [activeTabId, tabs])
+  }, [activeTabId, tabs, applyTabState])
 
   const handleTabRefresh = useCallback(() => {
     setTabs(prev => prev.map(t => t.id === activeTabId ? { ...t, stale: false } : t))
@@ -916,36 +964,23 @@ function App() {
     const id = 'tab-' + Date.now()
     const newTab = makeTab(id, label, { field, op, value })
 
-    // Suppress the [activeSearch] effect while we swap state between tabs.
     tabSwitchingRef.current = true
+    histogramSuppressRef.current = true
 
-    // Snapshot the outgoing tab's scroll position before the grid changes.
+    // Snapshot scroll position before the grid changes.
     const firstRow = gridRef.current?.api?.getFirstDisplayedRow?.() ?? 0
 
     setTabs(prev => [
       ...prev.map(t => t.id === activeTabId ? {
         ...t,
-        savedPage: currentPage,
-        savedSearch: activeSearch,
-        savedSearchMode: searchMode,
-        savedSearchText: searchText,
-        savedScrollRow: firstRow,
-        savedFilters: activeFilters,
+        savedState: { page: currentPage, search: activeSearch, searchMode, searchText, scrollRow: firstRow, filters: activeFilters, bookmarkOnly },
       } : t),
       newTab,
     ])
-    activeBaseQueryRef.current = { field, op, value }
-    setCurrentPage(1)
-    setActiveSearch('')
-    setSearchMode('simple')
-    setSearchText('')
-    setSearchError('')
-    setActiveFilters(null)
-    pendingScrollRowRef.current = 0
-    setSelectedEvent(null)
-    setSelectedEvents([])
+    // New tab always starts with cleared user-applied state (no search, no bookmark, no filters).
+    applyTabState(newTab)
     setActiveTabId(id)
-  }, [tabs, tabLimit, activeTabId, currentPage, activeSearch, searchMode, searchText, activeFilters])
+  }, [tabs, tabLimit, activeTabId, currentPage, activeSearch, searchMode, searchText, activeFilters, bookmarkOnly, applyTabState])
 
   const handleSaveTabQuery = useCallback(async (tabId, name) => {
     const tab = tabs.find(t => t.id === tabId)
@@ -1037,7 +1072,7 @@ function App() {
   useEffect(() => {
     const cancelOpen = EventsOn('menu:open-database', () => { handleOpenDB() })
     const cancelImport = EventsOn('menu:import-csv', () => { handleImportCSV() })
-    const cancelImportEZ = EventsOn('menu:import-eztool-dir', () => { handleImportEZToolsDir() })
+    const cancelImportEZ = EventsOn('menu:import-folder-recursive', () => { handleImportFolderRecursive() })
     const cancelClose = EventsOn('menu:close-database', () => { handleCloseDB() })
     const cancelExport = EventsOn('menu:export-csv', () => { handleExportCSV() })
     const cancelTheme = EventsOn('menu:theme', () => { setShowThemePicker(true) })
@@ -1065,7 +1100,7 @@ function App() {
       if (typeof cancelLogging === 'function') cancelLogging()
       if (typeof cancelSettings === 'function') cancelSettings()
     }
-  }, [handleOpenDB, handleImportCSV, handleImportEZToolsDir, handleCloseDB, handleExportCSV])
+  }, [handleOpenDB, handleImportCSV, handleImportFolderRecursive, handleCloseDB, handleExportCSV])
 
   // Handle window close button and File > Quit — show React confirmation dialog.
   // Registered once with empty deps; actual save+quit handled in the dialog's confirm handler.
@@ -1149,13 +1184,18 @@ function App() {
           onConnect={handlePostgresConnect}
           onClose={() => setShowPostgres(false)}
         />
+        <RecursiveImportSummaryDialog
+          visible={showRecursiveSummary}
+          summary={recursiveSummary}
+          onClose={() => setShowRecursiveSummary(false)}
+        />
         <div className="welcome">
           <h1>4n6time</h1>
           <p>Forensic Timeline Viewer</p>
           <div className="actions">
             <button onClick={handleOpenDB}>Open Database</button>
             <button onClick={handleImportCSV}>Import Timeline</button>
-            <button onClick={handleImportEZToolsDir}>Import EZ Tools Folder</button>
+            <button onClick={handleImportFolderRecursive} title="Walks the selected folder up to 3 levels deep and imports any supported EZ Tools CSV files.">Import Folder (Recursive)</button>
             <button onClick={() => setShowPostgres(true)}>Connect to PostgreSQL</button>
           </div>
         </div>
@@ -1360,6 +1400,12 @@ function App() {
         onTabLimitChange={handleSetTabLimit}
       />
 
+      <RecursiveImportSummaryDialog
+        visible={showRecursiveSummary}
+        summary={recursiveSummary}
+        onClose={() => setShowRecursiveSummary(false)}
+      />
+
       <PostgresDialog
         visible={showPushPostgres}
         mode="push"
@@ -1385,16 +1431,10 @@ function App() {
                 <button onClick={async () => {
                   try {
                     if (dbInfoRef.current) {
-                      const nonMain = tabsRef.current.filter(t => !t.isMain)
-                      const sessionData = nonMain.length > 0
-                        ? JSON.stringify({
-                            tabs: nonMain.map(t => ({ id: t.id, label: t.label, baseQuery: t.baseQuery })),
-                            activeTabId: activeTabIdRef.current,
-                          })
-                        : ''
+                      const sessionData = buildTabSessionJSON(tabsRef.current, activeTabIdRef.current, liveTabStateRef.current)
                       await SaveTabSession(sessionData).catch(() => {})
                     }
-                  } catch { /* ignore save errors — must quit */ }
+                  } catch { /* ignore save errors */ }
                   ForceQuit()
                 }}>Close</button>
                 <button className="logging-close-btn" onClick={() => setShowCloseConfirm(false)}>Cancel</button>
@@ -1464,6 +1504,12 @@ function App() {
             dbInfo={dbInfo}
             onSelectRange={handleTimelineSelectRange}
             theme={currentTheme}
+            activeSearch={activeSearch}
+            searchMode={searchMode}
+            bookmarkOnly={bookmarkOnly}
+            baseQuery={activeTab?.baseQuery || null}
+            histogramSuppressRef={histogramSuppressRef}
+            histogramVersion={histogramVersion}
           />
 
           <div className={`grid-container ${lightThemes.has(currentTheme) ? 'ag-theme-alpine' : 'ag-theme-alpine-dark'}`}>

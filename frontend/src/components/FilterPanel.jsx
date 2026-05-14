@@ -55,9 +55,9 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
       if (!cancelled) {
         setDistinctValues(values)
 
-        // For the main tab (no base query), always load the full DB date range.
-        // For scoped tabs, preserve any externally set date range (e.g. histogram selection).
-        if (!baseQuery || (!activeFilters?.dateFrom && !activeFilters?.dateTo)) {
+        // Only load the DB date range when no date range is currently active.
+        // This preserves histogram-selected ranges and user-typed dates on all tabs.
+        if (!activeFilters?.dateFrom && !activeFilters?.dateTo) {
           try {
             let dates
             if (baseQuery) {

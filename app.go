@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -407,12 +408,12 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 	return a.getDBInfo()
 }
 
-// ImportEZToolsDirectory opens a directory chooser and imports all EZ Tools
-// CSV files found within it. If no database is open, prompts for a new SQLite
-// file first.
-func (a *App) ImportEZToolsDirectory() (*DBInfo, error) {
+// ImportFolderRecursive opens a directory chooser, then walks the selected
+// folder up to 3 levels deep importing all recognized EZ Tool CSV files.
+// If no database is open, prompts for a new SQLite file first.
+func (a *App) ImportFolderRecursive() (*eztoolparser.ImportSummary, error) {
 	dirPath, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select EZ Tools Output Folder",
+		Title: "Select Folder to Import",
 	})
 	if err != nil {
 		return nil, err
@@ -422,9 +423,8 @@ func (a *App) ImportEZToolsDirectory() (*DBInfo, error) {
 	}
 
 	importStart := time.Now()
-	a.logInfo("EZ Tools directory import started: " + dirPath)
+	a.logInfo("Recursive folder import started: " + dirPath)
 
-	// Determine target store
 	var store database.Store
 	importIntoExisting := a.store != nil && (a.driver == "postgres" || a.driver == "sqlite")
 
@@ -463,39 +463,22 @@ func (a *App) ImportEZToolsDirectory() (*DBInfo, error) {
 	}
 
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "reading", "message": "Scanning EZ Tools folder...", "count": 0, "total": 0,
+		"phase": "reading", "message": "Scanning folder tree...", "count": 0, "total": 0,
 	})
 
-	progressCallback := func(count int) {
+	progressCallback := func(relPath string, count int) {
 		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+			"phase":   "reading",
+			"message": fmt.Sprintf("Imported %s (%d events)", relPath, count),
+			"count":   count,
+			"total":   0,
 		})
 	}
 
-	result, err := eztoolparser.ReadDirectory(dirPath, progressCallback)
+	summary, err := eztoolparser.ImportFolderRecursive(dirPath, store, progressCallback)
 	if err != nil {
 		closeOnError()
-		return nil, fmt.Errorf("reading EZ Tools directory: %w", err)
-	}
-
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "reading", "message": fmt.Sprintf("Importing %s data: %d events...", result.Tool, result.Count), "count": result.Count, "total": 0,
-	})
-
-	events := result.Events
-	total := len(events)
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
-	})
-
-	_, err = store.InsertEvents(events, func(count int) {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
-		})
-	})
-	if err != nil {
-		closeOnError()
-		return nil, fmt.Errorf("inserting events: %w", err)
+		return nil, fmt.Errorf("recursive folder import: %w", err)
 	}
 
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
@@ -511,12 +494,25 @@ func (a *App) ImportEZToolsDirectory() (*DBInfo, error) {
 		a.store = store
 		a.driver = "sqlite"
 	}
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "done", "message": fmt.Sprintf("Import complete: %d events", total), "count": total, "total": total,
-	})
-	a.logInfo(fmt.Sprintf("EZ Tools directory import complete: %d events (%s tool) from %s in %s",
-		total, result.Tool, dirPath, time.Since(importStart).Round(time.Millisecond)))
 
+	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		"phase":   "done",
+		"message": fmt.Sprintf("Import complete: %d events from %d files", summary.TotalEvents, summary.TotalFilesProcessed),
+		"count":   summary.TotalEvents,
+		"total":   summary.TotalEvents,
+	})
+	a.logInfo(fmt.Sprintf("Recursive folder import complete: %d events, %d files in %s",
+		summary.TotalEvents, summary.TotalFilesProcessed, time.Since(importStart).Round(time.Millisecond)))
+
+	return summary, nil
+}
+
+// GetCurrentDBInfo returns database info for the currently open database.
+// Returns nil without error if no database is open.
+func (a *App) GetCurrentDBInfo() (*DBInfo, error) {
+	if a.store == nil {
+		return nil, nil
+	}
 	return a.getDBInfo()
 }
 
@@ -530,6 +526,8 @@ type QueryRequest struct {
 	Page         int          `json:"page"`
 	PageSize     int          `json:"pageSize"`
 	SearchText   string       `json:"searchText"`
+	// SearchMode is "simple" (default keyword LIKE) or "advanced" (raw SQL WHERE fragment).
+	SearchMode   string       `json:"searchMode"`
 	BookmarkOnly bool         `json:"bookmarkOnly"`
 	// BaseField/BaseOp/BaseValue: optional tab base query ANDed with all filters.
 	BaseField string `json:"baseField"`
@@ -561,7 +559,8 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	}
 
 	q := query.New(pageSize)
-	q.SetDialect(a.queryDialect())
+	d := a.queryDialect()
+	q.SetDialect(d)
 
 	// Set logic
 	if req.Logic == "OR" {
@@ -684,11 +683,20 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		countSQL = "/* no-notes */ " + countSQL
 	}
 
+	// Build the notes-side filter for the UNION ALL. When excludeNotes is false,
+	// compatible filters (datetime, bookmark, tag, color, desc) are applied to the
+	// examiner_notes SELECT so notes that don't satisfy those conditions are excluded.
+	// startIdx follows the last main-query placeholder so PostgreSQL $N numbering is correct.
+	var notesFilter *database.NotesFilter
+	if !excludeNotes {
+		notesFilter = buildNotesFilter(req, d, len(args)+1)
+	}
+
 	// Get total count (ignore error to preserve existing behavior: count stays 0 on failure)
-	totalCount, _ := a.store.ExecuteCountQuery(countSQL, countArgs)
+	totalCount, _ := a.store.ExecuteCountQuery(countSQL, countArgs, notesFilter)
 
 	// Get events
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQuery(sqlStr, args, notesFilter)
 	if err != nil {
 		a.logError("Query error: " + err.Error())
 		return nil, fmt.Errorf("querying events: %w", err)
@@ -728,13 +736,13 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 	sqlStr, args := rq.Build()
 	countSQL, countArgs := rq.BuildCount()
 
-	totalCount, err := a.store.ExecuteCountQuery(countSQL, countArgs)
+	totalCount, err := a.store.ExecuteCountQuery(countSQL, countArgs, nil)
 	if err != nil {
 		a.logError("Advanced search count error: " + err.Error())
 		return nil, fmt.Errorf("count query error: %w", err)
 	}
 
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQuery(sqlStr, args, nil)
 	if err != nil {
 		a.logError("Advanced search error: " + err.Error())
 		return nil, fmt.Errorf("query error: %w", err)
@@ -927,9 +935,30 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 
 	sqlStr, args := q.Build()
 
+	// Determine whether to exclude examiner notes from the export, using the same
+	// compatible-field logic as QueryEvents.
+	exportExaminerCompatible := map[string]bool{
+		"source": true, "datetime": true, "tag": true,
+		"color": true, "bookmark": true, "desc": true,
+	}
+	excludeExportNotes := false
+	for _, f := range req.Filters {
+		if !exportExaminerCompatible[f.Field] {
+			excludeExportNotes = true
+			break
+		}
+	}
+	if excludeExportNotes {
+		sqlStr = "/* no-notes */ " + sqlStr
+	}
+	var exportNotesFilter *database.NotesFilter
+	if !excludeExportNotes {
+		exportNotesFilter = buildNotesFilter(req, a.queryDialect(), len(args)+1)
+	}
+
 	runtime.EventsEmit(a.ctx, "export:status", "Querying events...")
 
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQuery(sqlStr, args, exportNotesFilter)
 	if err != nil {
 		return "", fmt.Errorf("querying events: %w", err)
 	}
@@ -959,6 +988,67 @@ func (a *App) GetDistinctValues(field string) (map[string]int64, error) {
 // buildBaseWhere constructs the WHERE clause and argument for a single base query predicate.
 // Mirrors query.Simple: LIKE and NOT LIKE operators wrap the value with % wildcards so that
 // GetFilteredDistinctValues and GetFilteredMinMaxDate match exactly what QueryEvents produces.
+// buildNotesFilter constructs the WHERE clause and parameter values for the
+// examiner_notes side of the UNION ALL in ExecuteQuery/ExecuteCountQuery.
+// Only filters that map to columns in examiner_notes are included; incompatible
+// fields are silently skipped (the caller's excludeNotes detection ensures notes
+// are omitted entirely when a filter references a field notes cannot satisfy).
+//
+// startIdx is the 1-based placeholder index to begin at, which must equal
+// len(mainQueryArgs)+1 so that PostgreSQL $N numbers do not collide with the
+// main query placeholders.
+func buildNotesFilter(req QueryRequest, d query.QueryDialect, startIdx int) *database.NotesFilter {
+	// Map from log2timeline field name to the examiner_notes column name.
+	noteFieldMap := map[string]string{
+		"datetime": "datetime",
+		"bookmark": "bookmark",
+		"tag":      "tag",
+		"color":    "color",
+		"desc":     "description",
+	}
+
+	var parts []string
+	var args []interface{}
+	idx := startIdx
+
+	for _, f := range req.Filters {
+		noteCol, ok := noteFieldMap[f.Field]
+		if !ok {
+			continue
+		}
+		var op string
+		switch f.Operator {
+		case "=", "!=", ">=", "<=", "LIKE", "NOT LIKE":
+			op = f.Operator
+		default:
+			continue
+		}
+		val := f.Value
+		if f.Field == "datetime" {
+			val = normalizeDate(val, f.Operator == "<=")
+		}
+		if op == "LIKE" || op == "NOT LIKE" {
+			parts = append(parts, fmt.Sprintf("%s %s %s", noteCol, op, d.Placeholder(idx)))
+			args = append(args, "%"+val+"%")
+		} else {
+			parts = append(parts, fmt.Sprintf("%s %s %s", noteCol, op, d.Placeholder(idx)))
+			args = append(args, val)
+		}
+		idx++
+	}
+
+	// Bookmark-only filter: examiner notes have their own bookmark column.
+	if req.BookmarkOnly {
+		parts = append(parts, fmt.Sprintf("bookmark = %s", d.Placeholder(idx)))
+		args = append(args, int64(1))
+	}
+
+	if len(parts) == 0 {
+		return nil
+	}
+	return &database.NotesFilter{SQL: strings.Join(parts, " AND "), Args: args}
+}
+
 func buildBaseWhere(d query.QueryDialect, baseField, baseOp, baseValue string) (whereClause string, arg interface{}) {
 	col := d.QuoteColumn(baseField)
 	ph := d.Placeholder(1)
@@ -1049,48 +1139,72 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 		return nil, fmt.Errorf("no database open")
 	}
 
-	// Build WHERE clause from filters using dialect-aware placeholders and quoting
+	// Build WHERE clause from filters using dialect-aware placeholders and quoting.
+	// alwaysParts are ANDed unconditionally (junk date guard, tab base query).
+	// userParts are combined with the user's chosen logic (AND/OR).
 	d := a.queryDialect()
-	var whereParts []string
+	var alwaysParts []string
+	var userParts []string
 	var whereArgs []interface{}
 	paramIdx := 1
 
 	// Always exclude junk dates (zeroed, pre-epoch, far-future)
-	whereParts = append(whereParts, "datetime > '1970-01-01' AND datetime < '2100-01-01'")
+	alwaysParts = append(alwaysParts, "datetime > '1970-01-01' AND datetime < '2100-01-01'")
 
 	for _, f := range req.Filters {
 		switch f.Operator {
 		case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
-			// Normalize partial dates for datetime fields
 			val := f.Value
 			if f.Field == "datetime" {
 				val = normalizeDate(val, f.Operator == "<=")
 			}
-			whereParts = append(whereParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
+			userParts = append(userParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
 			paramIdx++
 			whereArgs = append(whereArgs, val)
 		}
 	}
 
-	// Full-text search for histogram
+	// Full-text or advanced search
 	if req.SearchText != "" {
-		searchFields := []string{
-			"desc", "filename", "source", "sourcetype", "type",
-			"user", "host", "extra", "tag", "url", "source_name",
-			"computer_name", "format", "notes",
+		if req.SearchMode == "advanced" {
+			// Advanced mode: SearchText is a raw SQL WHERE fragment. Inject it
+			// directly. Apply PostgreSQL reserved-word quoting when needed.
+			clause := req.SearchText
+			if a.driver == "postgres" {
+				clause = quotePostgresReservedWords(clause)
+			}
+			userParts = append(userParts, "("+clause+")")
+		} else {
+			// Simple mode: keyword LIKE search across key columns.
+			searchFields := []string{
+				"desc", "filename", "source", "sourcetype", "type",
+				"user", "host", "extra", "tag", "url", "source_name",
+				"computer_name", "format", "notes",
+			}
+			var orParts []string
+			for _, field := range searchFields {
+				orParts = append(orParts, fmt.Sprintf("%s LIKE %s", d.QuoteColumn(field), d.Placeholder(paramIdx)))
+				paramIdx++
+				whereArgs = append(whereArgs, "%"+req.SearchText+"%")
+			}
+			userParts = append(userParts, "("+strings.Join(orParts, " OR ")+")")
 		}
-		var orParts []string
-		for _, field := range searchFields {
-			orParts = append(orParts, fmt.Sprintf("%s LIKE %s", d.QuoteColumn(field), d.Placeholder(paramIdx)))
-			paramIdx++
-			whereArgs = append(whereArgs, "%"+req.SearchText+"%")
-		}
-		whereParts = append(whereParts, "("+strings.Join(orParts, " OR ")+")")
 	}
 
-	// Bookmark filter for histogram
+	// Bookmark filter
 	if req.BookmarkOnly {
-		whereParts = append(whereParts, "bookmark = 1")
+		userParts = append(userParts, "bookmark = 1")
+	}
+
+	// Tab base query: always ANDed regardless of the user's AND/OR logic setting
+	if req.BaseField != "" {
+		baseOp := "="
+		if req.BaseOp == "LIKE" {
+			baseOp = "LIKE"
+		}
+		alwaysParts = append(alwaysParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(req.BaseField), baseOp, d.Placeholder(paramIdx)))
+		paramIdx++
+		whereArgs = append(whereArgs, req.BaseValue)
 	}
 
 	logic := "AND"
@@ -1098,17 +1212,13 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 		logic = "OR"
 	}
 
-	whereClause := ""
-	// The first part (junk date filter) is always AND
-	// User filters get their own logic
-	if len(whereParts) == 1 {
-		// Only the junk date filter, no user filters
-		whereClause = "WHERE " + whereParts[0]
-	} else {
-		// Junk date filter AND (user filters with their logic)
-		userParts := whereParts[1:]
-		whereClause = "WHERE " + whereParts[0] + " AND (" + strings.Join(userParts, " "+logic+" ") + ")"
+	// Assemble: all alwaysParts ANDed, then user parts joined with logic
+	allParts := make([]string, len(alwaysParts))
+	copy(allParts, alwaysParts)
+	if len(userParts) > 0 {
+		allParts = append(allParts, "("+strings.Join(userParts, " "+logic+" ")+")")
 	}
+	whereClause := "WHERE " + strings.Join(allParts, " AND ")
 
 	// Delegate to store for all database operations (date range, bucketing, histogram query)
 	dbBuckets, err := a.store.GetTimelineHistogram(whereClause, whereArgs)
@@ -1252,8 +1362,14 @@ func (a *App) ConnectPostgres(host, port, dbName, user, password, sslMode string
 		sslMode = "disable"
 	}
 
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		user, password, host, port, dbName, sslMode)
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     dbName,
+		RawQuery: "sslmode=" + sslMode,
+	}
+	connStr := u.String()
 
 	// Close any existing database
 	if a.store != nil {
@@ -1284,8 +1400,14 @@ func (a *App) CreatePostgresDatabase(host, port, dbName, user, password, sslMode
 		sslMode = "disable"
 	}
 
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		user, password, host, port, dbName, sslMode)
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     dbName,
+		RawQuery: "sslmode=" + sslMode,
+	}
+	connStr := u.String()
 
 	// Close any existing database
 	if a.store != nil {
@@ -1321,8 +1443,14 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 		sslMode = "disable"
 	}
 
-	connStr := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		user, password, host, port, dbName, sslMode)
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     fmt.Sprintf("%s:%s", host, port),
+		Path:     dbName,
+		RawQuery: "sslmode=" + sslMode,
+	}
+	connStr := u.String()
 
 	pushStart := time.Now()
 	a.logInfo("Push to PostgreSQL started: " + maskConnStr(connStr))
@@ -1358,7 +1486,7 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 	q.SetPage(1)
 	sqlStr, args := q.Build()
 
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQuery(sqlStr, args, nil)
 	if err != nil {
 		return "", fmt.Errorf("reading events from SQLite: %w", err)
 	}

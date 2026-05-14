@@ -14,7 +14,7 @@ Import Timeline: Imports a timeline file and creates a new SQLite database. Use 
 
 PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
-Import EZ Tools Folder: Batch imports all CSV files from an EZ Tools output directory. Use File > Import EZ Tools Folder or the Import EZ Tools Folder button on the welcome screen. See the EZ Tools Import section for details.
+Import Folder (Recursive): Walks the selected folder up to 3 levels deep and imports any supported EZ Tools CSV files. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen. See the EZ Tools Import section for details.
 
 Supported import formats:
 - CSV: Standard log2timeline/Plaso CSV output (comma-delimited with standard forensic timeline columns)
@@ -22,7 +22,7 @@ Supported import formats:
 - TLN: 5-field pipe-delimited timeline format
 - L2TTLN: 7-field pipe-delimited extended timeline format
 - Dynamic CSV: Plaso default output with variable columns defined by header row
-- EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd). Auto-detected when importing single files; use Import EZ Tools Folder for batch import.
+- EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd). Auto-detected when importing single files; use Import Folder (Recursive) for batch import.
 
 After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
@@ -281,11 +281,11 @@ Persistence: Check "Resume logging on next launch" to have logging automatically
     title: 'EZ Tools Import',
     content: `EZ Tools are Eric Zimmerman's forensic artifact parsers for Windows evidence. 4n6time can import their CSV output directly, auto-detecting the tool and expanding multiple timestamp columns into individual timeline events.
 
-Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive), SrumECmd (SRUM database), MFTECmd (NTFS MFT), and SBECmd (ShellBags).
+Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive), SrumECmd (SRUM database), MFTECmd (NTFS MFT), and SBECmd (ShellBags); 19 subtypes total.
 
 Single file import: Use the normal Import Timeline button (or File > Import Timeline). EZ Tool CSVs are auto-detected from their column headers. No special steps are needed.
 
-Directory import: Use the Import EZ Tools Folder button on the welcome screen (or File > Import EZ Tools Folder) to batch import all CSV files from a tool output directory. This is useful after running a tool like EvtxECmd against an entire evidence image, which produces one CSV per event log.
+Recursive folder import: Use the Import Folder (Recursive) button on the welcome screen (or File > Import Folder (Recursive)) to batch import supported EZ Tool CSV files from a folder tree. The import walks up to 3 levels below the selected folder (root = depth 0), auto-detects each CSV, and reports a per-tool breakdown plus any skipped files. Non-CSV files and unrecognized CSVs are silently skipped or listed with a reason.
 
 Multi-timestamp expansion: Each row in an EZ Tool CSV may contain multiple timestamp columns (e.g., Created, Modified, Accessed). Each non-empty timestamp becomes a separate timeline event. This gives you a complete picture of all temporal activity associated with each artifact.
 

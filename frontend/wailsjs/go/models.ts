@@ -17,6 +17,80 @@ export namespace database {
 
 }
 
+export namespace eztoolparser {
+	
+	export class SkippedFile {
+	    relativePath: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SkippedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.relativePath = source["relativePath"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class ToolStats {
+	    fileCount: number;
+	    eventCount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ToolStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.fileCount = source["fileCount"];
+	        this.eventCount = source["eventCount"];
+	    }
+	}
+	export class ImportSummary {
+	    perTool: Record<string, ToolStats>;
+	    skippedFiles: SkippedFile[];
+	    totalEvents: number;
+	    totalFilesProcessed: number;
+	    directoriesWalked: number;
+	    maxDepthReached: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.perTool = this.convertValues(source["perTool"], ToolStats, true);
+	        this.skippedFiles = this.convertValues(source["skippedFiles"], SkippedFile);
+	        this.totalEvents = source["totalEvents"];
+	        this.totalFilesProcessed = source["totalFilesProcessed"];
+	        this.directoriesWalked = source["directoriesWalked"];
+	        this.maxDepthReached = source["maxDepthReached"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+
+}
+
 export namespace main {
 	
 	export class DBInfo {
@@ -78,6 +152,7 @@ export namespace main {
 	    page: number;
 	    pageSize: number;
 	    searchText: string;
+	    searchMode: string;
 	    bookmarkOnly: boolean;
 	    baseField: string;
 	    baseOp: string;
@@ -95,6 +170,7 @@ export namespace main {
 	        this.page = source["page"];
 	        this.pageSize = source["pageSize"];
 	        this.searchText = source["searchText"];
+	        this.searchMode = source["searchMode"];
 	        this.bookmarkOnly = source["bookmarkOnly"];
 	        this.baseField = source["baseField"];
 	        this.baseOp = source["baseOp"];

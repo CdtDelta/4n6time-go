@@ -2404,3 +2404,145 @@ html, body, #root {
 .session-dismiss-btn:hover {
   background: var(--color-hover-bg, rgba(255, 255, 255, 0.08));
 }
+
+/* Recursive Import Summary Dialog */
+.recursive-summary-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-accent);
+  border-radius: 8px;
+  width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.recursive-summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+  flex-shrink: 0;
+}
+
+.recursive-summary-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 300;
+  color: var(--text-primary);
+}
+
+.recursive-summary-content {
+  padding: 8px 20px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.recursive-summary-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.recursive-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: var(--bg-accent);
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  padding: 10px 16px;
+  min-width: 100px;
+  flex: 1;
+}
+
+.recursive-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.recursive-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 2px;
+}
+
+.recursive-summary-section {
+  margin-bottom: 12px;
+}
+
+.recursive-summary-section h3 {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  margin: 0 0 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.recursive-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.recursive-summary-table th {
+  text-align: left;
+  padding: 4px 8px;
+  color: var(--text-muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.recursive-summary-table td {
+  padding: 4px 8px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-primary);
+}
+
+.recursive-skipped-table .recursive-skipped-path {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.recursive-skipped-toggle {
+  background: transparent;
+  border: 1px solid var(--border-primary);
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+
+.recursive-skipped-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-accent-hover);
+}
+
+.recursive-summary-footer {
+  padding: 10px 20px 16px;
+  display: flex;
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.recursive-close-btn {
+  padding: 6px 20px;
+  background: var(--bg-accent);
+  border: 1px solid var(--border-accent);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.recursive-close-btn:hover {
+  background: var(--bg-accent-hover);
+}

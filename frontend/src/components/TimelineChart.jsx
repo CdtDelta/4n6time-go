@@ -6,16 +6,20 @@ import {
 import { GetTimelineHistogram } from '../../wailsjs/go/main/App'
 import themes from '../themes'
 
-function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme }) {
+function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeSearch, searchMode, bookmarkOnly, baseQuery, histogramSuppressRef, histogramVersion }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
   const [refAreaLeft, setRefAreaLeft] = useState(null)
   const [refAreaRight, setRefAreaRight] = useState(null)
   const [selecting, setSelecting] = useState(false)
 
-  // Load histogram data when visible, filters change, or db changes
+  // Load histogram data when visible, filters change, or db changes.
+  // histogramSuppressRef suppresses the fetch during user-initiated tab switches; histogramVersion
+  // is bumped by the [activeTabId] effect once the switch completes and the flag is cleared.
   useEffect(() => {
     if (!visible || !dbInfo) return
+    // histogramSuppressRef is intentionally not in deps: we read .current at call time.
+    if (histogramSuppressRef?.current) return
 
     let cancelled = false
     setLoading(true)
@@ -28,6 +32,12 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme }) {
           orderBy: 'datetime',
           page: 1,
           pageSize: 1000,
+          searchText: activeSearch || '',
+          searchMode: searchMode || 'simple',
+          bookmarkOnly: bookmarkOnly || false,
+          baseField: baseQuery?.field || '',
+          baseOp: baseQuery?.op || '',
+          baseValue: baseQuery?.value || '',
         }
 
         // Add date range filters if present
@@ -57,7 +67,7 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme }) {
 
     loadData()
     return () => { cancelled = true }
-  }, [visible, filters, dbInfo])
+  }, [visible, filters, dbInfo, activeSearch, searchMode, bookmarkOnly, baseQuery, histogramVersion])
 
   // Format timestamp for x-axis display
   const formatLabel = (ts) => {

@@ -866,11 +866,13 @@ func (db *PostgresStore) DeleteQuery(name string) error {
 
 // ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
 // column order (Pattern B: id, datetime, timezone, MACB, ...).
-// Examiner notes are merged via UNION ALL with negated IDs.
-func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
-	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect)
+// Examiner notes are merged via UNION ALL with negated IDs. notesFilter, when
+// non-nil, applies a WHERE clause to the examiner_notes SELECT.
+func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error) {
+	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect, notesFilter)
+	allArgs := combineArgs(args, notesFilter)
 
-	rows, err := db.conn.Query(sqlStr, args...)
+	rows, err := db.conn.Query(sqlStr, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -879,12 +881,14 @@ func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*mod
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
-// Examiner notes are included in the count via UNION ALL.
-func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
-	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect)
+// Examiner notes are included in the count via UNION ALL, filtered by notesFilter
+// when non-nil.
+func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) (int64, error) {
+	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect, notesFilter)
+	allArgs := combineArgs(args, notesFilter)
 
 	var count int64
-	err := db.conn.QueryRow(sqlStr, args...).Scan(&count)
+	err := db.conn.QueryRow(sqlStr, allArgs...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}

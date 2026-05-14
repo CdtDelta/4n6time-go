@@ -26,8 +26,8 @@ func main() {
 	fileMenu.AddText("Import Timeline...", keys.CmdOrCtrl("i"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:import-csv")
 	})
-	fileMenu.AddText("Import EZ Tools Folder...", nil, func(cd *menu.CallbackData) {
-		runtime.EventsEmit(app.ctx, "menu:import-eztool-dir")
+	fileMenu.AddText("Import Folder (Recursive)...", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:import-folder-recursive")
 	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("Close Database", keys.CmdOrCtrl("w"), func(cd *menu.CallbackData) {

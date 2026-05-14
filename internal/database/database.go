@@ -873,11 +873,14 @@ func examinerNotesUnionPatternB(dialect Dialect) string {
 //
 // Examiner notes are merged via UNION ALL with negated IDs. The union is
 // wrapped in a subquery so the outer ORDER BY and LIMIT/OFFSET apply to both
-// evidence events and examiner notes together.
-func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
-	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect)
+// evidence events and examiner notes together. notesFilter, when non-nil,
+// adds a WHERE clause to the examiner_notes SELECT to keep the two sides
+// of the UNION consistent with the main filter.
+func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error) {
+	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect, notesFilter)
+	allArgs := combineArgs(args, notesFilter)
 
-	rows, err := db.conn.Query(sqlStr, args...)
+	rows, err := db.conn.Query(sqlStr, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -886,12 +889,14 @@ func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
-// Examiner notes are included in the count via UNION ALL.
-func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
-	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect)
+// Examiner notes are included in the count via UNION ALL, filtered by notesFilter
+// when non-nil so the count matches the ExecuteQuery result set.
+func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) (int64, error) {
+	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect, notesFilter)
+	allArgs := combineArgs(args, notesFilter)
 
 	var count int64
-	err := db.conn.QueryRow(sqlStr, args...).Scan(&count)
+	err := db.conn.QueryRow(sqlStr, allArgs...).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}
@@ -1015,11 +1020,19 @@ func shouldIncludeExaminerNotes(sqlStr string) bool {
 // SELECT and the examiner notes UNION ALL in a subquery, and re-applies the
 // ORDER BY and pagination on the outer query.
 //
+// notesFilter, when non-nil, appends a WHERE clause to the examiner_notes SELECT
+// so that bookmark, datetime, and other compatible filters apply to notes as well.
+//
 // If the query filters on a specific source that is not 'EXAMINER', the UNION
 // is skipped entirely and the original query is returned unchanged.
-func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect) string {
+func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect, notesFilter *NotesFilter) string {
 	if !shouldIncludeExaminerNotes(sqlStr) {
 		return sqlStr
+	}
+
+	notesUnion := examinerNotesUnionPatternB(dialect)
+	if notesFilter != nil && notesFilter.SQL != "" {
+		notesUnion += " WHERE " + notesFilter.SQL
 	}
 
 	// Find ORDER BY clause position (case-insensitive search for " ORDER BY ")
@@ -1027,13 +1040,13 @@ func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect) string {
 	orderIdx := strings.Index(upper, " ORDER BY ")
 	if orderIdx < 0 {
 		// No ORDER BY: just append the union
-		return "SELECT * FROM (" + sqlStr + examinerNotesUnionPatternB(dialect) + ") AS combined"
+		return "SELECT * FROM (" + sqlStr + notesUnion + ") AS combined"
 	}
 
 	basePart := sqlStr[:orderIdx]
 	tailPart := sqlStr[orderIdx:]
 
-	return "SELECT * FROM (" + basePart + examinerNotesUnionPatternB(dialect) + ") AS combined" + tailPart
+	return "SELECT * FROM (" + basePart + notesUnion + ") AS combined" + tailPart
 }
 
 // wrapCountWithExaminerNotes takes a query.BuildCount() output and adds the
@@ -1041,13 +1054,31 @@ func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect) string {
 //
 //	SELECT COUNT(rowid) FROM log2timeline [WHERE ...]
 //
+// notesFilter, when non-nil, restricts the examiner_notes count to only rows
+// that satisfy the compatible filter conditions.
+//
 // If the query filters on a specific source that is not 'EXAMINER', the
 // examiner notes count is not added.
-func wrapCountWithExaminerNotes(sqlStr string, dialect Dialect) string {
+func wrapCountWithExaminerNotes(sqlStr string, dialect Dialect, notesFilter *NotesFilter) string {
 	if !shouldIncludeExaminerNotes(sqlStr) {
 		return sqlStr
 	}
-	return "SELECT (" + sqlStr + ") + (SELECT COUNT(*) FROM examiner_notes)"
+	notesCountSQL := "SELECT COUNT(*) FROM examiner_notes"
+	if notesFilter != nil && notesFilter.SQL != "" {
+		notesCountSQL += " WHERE " + notesFilter.SQL
+	}
+	return "SELECT (" + sqlStr + ") + (" + notesCountSQL + ")"
+}
+
+// combineArgs appends notesFilter.Args to args when a notes filter is present.
+func combineArgs(args []interface{}, notesFilter *NotesFilter) []interface{} {
+	if notesFilter == nil || len(notesFilter.Args) == 0 {
+		return args
+	}
+	combined := make([]interface{}, len(args)+len(notesFilter.Args))
+	copy(combined, args)
+	copy(combined[len(args):], notesFilter.Args)
+	return combined
 }
 
 // scanFieldsOrderEvents scans rows using model.Fields column order.

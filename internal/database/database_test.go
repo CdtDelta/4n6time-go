@@ -490,3 +490,191 @@ func TestRebuildIndexes(t *testing.T) {
 		t.Error("expected host_idx to be dropped")
 	}
 }
+
+func TestGetTimelineHistogramFiltered(t *testing.T) {
+	db := createTestDB(t)
+
+	events := []*model.Event{
+		{Source: "FILE", Host: "HOST1", Datetime: "2025-01-10 08:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "FILE", Host: "HOST1", Datetime: "2025-01-11 09:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "REG", Host: "HOST2", Datetime: "2025-02-05 10:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+	}
+	if _, err := db.InsertEvents(events, nil); err != nil {
+		t.Fatalf("InsertEvents failed: %v", err)
+	}
+
+	// Unfiltered: all three events should produce buckets
+	all, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01'", nil)
+	if err != nil {
+		t.Fatalf("GetTimelineHistogram (unfiltered) failed: %v", err)
+	}
+	var totalAll int64
+	for _, b := range all {
+		totalAll += b.Count
+	}
+	if totalAll != 3 {
+		t.Errorf("expected 3 total events unfiltered, got %d", totalAll)
+	}
+
+	// Filtered by source=FILE: only 2 events should appear
+	filtered, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND source = ?", []interface{}{"FILE"})
+	if err != nil {
+		t.Fatalf("GetTimelineHistogram (filtered) failed: %v", err)
+	}
+	var totalFiltered int64
+	for _, b := range filtered {
+		totalFiltered += b.Count
+	}
+	if totalFiltered != 2 {
+		t.Errorf("expected 2 FILE events, got %d", totalFiltered)
+	}
+}
+
+func TestGetTimelineHistogramBookmark(t *testing.T) {
+	db := createTestDB(t)
+
+	events := []*model.Event{
+		{Source: "FILE", Datetime: "2025-03-01 08:00:00", Bookmark: 1, MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "FILE", Datetime: "2025-03-02 08:00:00", Bookmark: 0, MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "FILE", Datetime: "2025-03-03 08:00:00", Bookmark: 1, MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+	}
+	if _, err := db.InsertEvents(events, nil); err != nil {
+		t.Fatalf("InsertEvents failed: %v", err)
+	}
+
+	// Bookmark-only: should see only 2 bookmarked events
+	bookmarked, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND bookmark = 1", nil)
+	if err != nil {
+		t.Fatalf("GetTimelineHistogram (bookmark) failed: %v", err)
+	}
+	var totalBookmarked int64
+	for _, b := range bookmarked {
+		totalBookmarked += b.Count
+	}
+	if totalBookmarked != 2 {
+		t.Errorf("expected 2 bookmarked events, got %d", totalBookmarked)
+	}
+}
+
+// TestExaminerNotesBookmarkFilter verifies that a bookmark-only NotesFilter applied
+// via ExecuteCountQuery excludes unbookmarked examiner notes from the UNION count.
+func TestExaminerNotesBookmarkFilter(t *testing.T) {
+	db := createTestDB(t)
+
+	events := []*model.Event{
+		{Source: "FILE", Datetime: "2025-04-01 08:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "FILE", Datetime: "2025-04-02 08:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+	}
+	if _, err := db.InsertEvents(events, nil); err != nil {
+		t.Fatalf("InsertEvents failed: %v", err)
+	}
+
+	// Insert two examiner notes: one bookmarked, one not.
+	if _, err := db.InsertExaminerNote("2025-04-01 09:00:00", "bookmarked note", "", ""); err != nil {
+		t.Fatalf("InsertExaminerNote (bookmarked) failed: %v", err)
+	}
+	if _, err := db.InsertExaminerNote("2025-04-02 09:00:00", "unbookmarked note", "", ""); err != nil {
+		t.Fatalf("InsertExaminerNote (unbookmarked) failed: %v", err)
+	}
+	// Toggle bookmark on the first note (auto-incremented ID 1).
+	if _, err := db.ToggleExaminerNoteBookmark(1); err != nil {
+		t.Fatalf("ToggleExaminerNoteBookmark failed: %v", err)
+	}
+
+	countSQL := "SELECT COUNT(rowid) FROM log2timeline"
+
+	// Without notes filter: 2 events + 2 notes = 4.
+	total, err := db.ExecuteCountQuery(countSQL, nil, nil)
+	if err != nil {
+		t.Fatalf("ExecuteCountQuery (no filter) failed: %v", err)
+	}
+	if total != 4 {
+		t.Errorf("expected 4 without filter, got %d", total)
+	}
+
+	// With bookmark notes filter: 2 events + 1 bookmarked note = 3.
+	bookmarkFilter := &NotesFilter{SQL: "bookmark = ?", Args: []interface{}{int64(1)}}
+	filtered, err := db.ExecuteCountQuery(countSQL, nil, bookmarkFilter)
+	if err != nil {
+		t.Fatalf("ExecuteCountQuery (bookmark filter) failed: %v", err)
+	}
+	if filtered != 3 {
+		t.Errorf("expected 3 with bookmark filter (2 events + 1 note), got %d", filtered)
+	}
+}
+
+// TestExaminerNotesDateRangeFilter verifies that a datetime NotesFilter applied
+// via ExecuteCountQuery excludes examiner notes outside the date range.
+func TestExaminerNotesDateRangeFilter(t *testing.T) {
+	db := createTestDB(t)
+
+	events := []*model.Event{
+		{Source: "FILE", Datetime: "2025-05-10 08:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+	}
+	if _, err := db.InsertEvents(events, nil); err != nil {
+		t.Fatalf("InsertEvents failed: %v", err)
+	}
+
+	// Insert two notes: one inside the May range, one in June.
+	if _, err := db.InsertExaminerNote("2025-05-10 10:00:00", "inside range", "", ""); err != nil {
+		t.Fatalf("InsertExaminerNote (inside) failed: %v", err)
+	}
+	if _, err := db.InsertExaminerNote("2025-06-01 10:00:00", "outside range", "", ""); err != nil {
+		t.Fatalf("InsertExaminerNote (outside) failed: %v", err)
+	}
+
+	countSQL := "SELECT COUNT(rowid) FROM log2timeline"
+
+	// Without filter: 1 event + 2 notes = 3.
+	total, err := db.ExecuteCountQuery(countSQL, nil, nil)
+	if err != nil {
+		t.Fatalf("ExecuteCountQuery (no filter) failed: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("expected 3 without filter, got %d", total)
+	}
+
+	// With date range filter covering May only: 1 event + 1 in-range note = 2.
+	dateFilter := &NotesFilter{
+		SQL:  "datetime >= ? AND datetime <= ?",
+		Args: []interface{}{"2025-05-01 00:00:00", "2025-05-31 23:59:59"},
+	}
+	filtered, err := db.ExecuteCountQuery(countSQL, nil, dateFilter)
+	if err != nil {
+		t.Fatalf("ExecuteCountQuery (date filter) failed: %v", err)
+	}
+	if filtered != 2 {
+		t.Errorf("expected 2 with date filter (1 event + 1 in-range note), got %d", filtered)
+	}
+}
+
+// TestGetTimelineHistogramRawWhere verifies that GetTimelineHistogram correctly
+// applies a raw SQL WHERE fragment (as used by the advanced-search histogram path
+// in app.go's GetTimelineHistogram when SearchMode == "advanced").
+func TestGetTimelineHistogramRawWhere(t *testing.T) {
+	db := createTestDB(t)
+
+	events := []*model.Event{
+		{Source: "FILE", Host: "HOST-A", Datetime: "2025-07-01 08:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "REG", Host: "HOST-B", Datetime: "2025-07-02 09:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+		{Source: "FILE", Host: "HOST-A", Datetime: "2025-07-03 10:00:00", MACB: "M...", Type: "Written", StoreNumber: -1, StoreIndex: -1, VSSStoreNumber: -1},
+	}
+	if _, err := db.InsertEvents(events, nil); err != nil {
+		t.Fatalf("InsertEvents failed: %v", err)
+	}
+
+	// Simulate the WHERE clause that app.go builds when SearchMode == "advanced"
+	// and SearchText is "host = 'HOST-A'": the raw fragment is injected directly.
+	rawWhere := "WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND (host = 'HOST-A')"
+	buckets, err := db.GetTimelineHistogram(rawWhere, nil)
+	if err != nil {
+		t.Fatalf("GetTimelineHistogram with raw where failed: %v", err)
+	}
+	var total int64
+	for _, b := range buckets {
+		total += b.Count
+	}
+	if total != 2 {
+		t.Errorf("expected 2 events matching host=HOST-A, got %d", total)
+	}
+}
