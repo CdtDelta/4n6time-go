@@ -20,6 +20,8 @@ const (
 	ToolJLECmdAutomatic              = "JLECmd Automatic"
 	ToolJLECmdCustom                 = "JLECmd Custom"
 	ToolAmcacheUnassociatedFiles     = "AmcacheParser UnassociatedFileEntries"
+	ToolAmcacheAssociatedFileEntries = "AmcacheParser AssociatedFileEntries"
+	ToolAmcacheProgramEntries        = "AmcacheParser ProgramEntries"
 	ToolAmcacheDeviceContainers      = "AmcacheParser DeviceContainers"
 	ToolAmcacheDevicePnps            = "AmcacheParser DevicePnps"
 	ToolAmcacheDriveBinaries         = "AmcacheParser DriveBinaries"
@@ -31,9 +33,27 @@ const (
 	ToolSrumECmdNetworkUsages        = "SrumECmd NetworkUsages"
 	ToolSrumECmdPushNotifications    = "SrumECmd PushNotifications"
 	ToolSrumECmdVfuprov              = "SrumECmd vfuprov"
-	ToolMFTECmd                      = "MFTECmd"
-	ToolSBECmd                       = "SBECmd"
+	ToolMFTECmdMFT                    = "MFTECmd $MFT"
+	ToolMFTECmdJ                      = "MFTECmd $J"
+	ToolMFTECmdBoot                   = "MFTECmd $Boot"
+	ToolMFTECmdSDS                    = "MFTECmd $SDS"
+	ToolSBECmd                        = "SBECmd"
+	ToolRBCmd                         = "RBCmd"
+	ToolAppCompatCacheParser          = "AppCompatCacheParser"
+	ToolSrumECmdAppResourceUseInfo    = "SrumECmd AppResourceUseInfo"
+	ToolWxTCmdActivity                = "WxTCmd Activity"
+	ToolWxTCmdPackageIDs              = "WxTCmd PackageIDs"
 )
+
+// NoTimestampFormats contains tool names for recognized formats that have no
+// timestamp columns and therefore produce no timeline events. Files matching
+// these formats are skipped with an explanatory message rather than treated
+// as unknown.
+var NoTimestampFormats = map[string]struct{}{
+	ToolMFTECmdBoot:   {},
+	ToolMFTECmdSDS:    {},
+	ToolWxTCmdPackageIDs: {},
+}
 
 // ReadResult contains the outcome of an EZ Tool CSV import operation.
 type ReadResult struct {
@@ -41,6 +61,30 @@ type ReadResult struct {
 	Count    int
 	Excluded int
 	Tool     string
+}
+
+// DetectTool reads the CSV header of a file and returns the detected EZ Tool
+// type name. Returns an empty string with a nil error if the file is a valid
+// CSV but not a recognized EZ Tool format. Returns a non-nil error only for
+// file open or header read failures.
+func DetectTool(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("opening file: %w", err)
+	}
+	defer f.Close()
+
+	reader := csv.NewReader(newBOMStrippingReader(f))
+	reader.LazyQuotes = true
+	reader.FieldsPerRecord = -1
+
+	header, err := reader.Read()
+	if err != nil {
+		return "", fmt.Errorf("reading header: %w", err)
+	}
+
+	header = trimHeader(header)
+	return detectTool(header, path), nil
 }
 
 // ValidateFile reads the header of a CSV file and returns nil if it is a
@@ -62,7 +106,7 @@ func ValidateFile(path string) error {
 	}
 
 	header = trimHeader(header)
-	tool := detectTool(header)
+	tool := detectTool(header, path)
 	if tool == "" {
 		return fmt.Errorf("not a recognized EZ Tool CSV (columns: %s)", strings.Join(header, ", "))
 	}
@@ -88,7 +132,7 @@ func ReadEvents(path string, onProgress func(int)) (*ReadResult, error) {
 	}
 
 	header = trimHeader(header)
-	tool := detectTool(header)
+	tool := detectTool(header, path)
 	if tool == "" {
 		return nil, fmt.Errorf("not a recognized EZ Tool CSV")
 	}
@@ -247,7 +291,9 @@ func colVal(row []string, colIndex map[string]int, col string) string {
 }
 
 // detectTool identifies the EZ Tool type from CSV header columns.
-func detectTool(header []string) string {
+// path is used only when two formats share an identical header and the filename
+// is the only reliable discriminant (AssociatedFileEntries vs UnassociatedFileEntries).
+func detectTool(header []string, path string) string {
 	has := make(map[string]bool, len(header))
 	for _, col := range header {
 		has[col] = true
@@ -280,24 +326,31 @@ func detectTool(header []string) string {
 	}
 
 	// AmcacheParser subtypes
+	if has["InstallDateArpLastModified"] {
+		return ToolAmcacheProgramEntries
+	}
 	if has["ApplicationName"] && has["ProgramId"] && has["SHA1"] && has["FileKeyLastWriteTimestamp"] {
+		lower := strings.ToLower(filepath.Base(path))
+		if !strings.Contains(lower, "unassociated") && strings.Contains(lower, "associatedfile") {
+			return ToolAmcacheAssociatedFileEntries
+		}
 		return ToolAmcacheUnassociatedFiles
 	}
 	if has["KeyName"] && has["KeyLastWriteTimestamp"] {
-		if has["FriendlyName"] && has["IsConnected"] && has["IsMachineContainer"] {
-			return ToolAmcacheDeviceContainers
-		}
-		if has["ClassGuid"] && has["DriverId"] {
-			return ToolAmcacheDevicePnps
-		}
-		if has["DriverTimeStamp"] && has["DriverCheckSum"] {
-			return ToolAmcacheDriveBinaries
-		}
-		if has["Inf"] && has["SubmissionId"] {
-			return ToolAmcacheDriverPackages
-		}
 		if has["LnkName"] {
 			return ToolAmcacheShortCuts
+		}
+		if has["DriverTimeStamp"] {
+			return ToolAmcacheDriveBinaries
+		}
+		if has["BusReportedDescription"] {
+			return ToolAmcacheDevicePnps
+		}
+		if has["Hwids"] {
+			return ToolAmcacheDriverPackages
+		}
+		if has["DiscoveryMethod"] {
+			return ToolAmcacheDeviceContainers
 		}
 	}
 
@@ -318,19 +371,57 @@ func detectTool(header []string) string {
 		if has["NotificationType"] && has["PayloadSize"] {
 			return ToolSrumECmdPushNotifications
 		}
+		if has["BackgroundBytesRead"] {
+			return ToolSrumECmdAppResourceUseInfo
+		}
 		if has["Flags"] && has["Duration"] && has["StartTime"] && !has["ChargeLevel"] {
 			return ToolSrumECmdVfuprov
 		}
 	}
 
-	// MFTECmd
-	if has["EntryNumber"] && has["SequenceNumber"] && has["ParentPath"] && has["Created0x10"] {
-		return ToolMFTECmd
+	// MFTECmd $Boot (volume boot record; no timestamp columns)
+	if has["EntryPoint"] && has["Signature"] && has["BytesPerSector"] && has["SectorsPerCluster"] {
+		return ToolMFTECmdBoot
+	}
+
+	// MFTECmd $SDS (NTFS security descriptor stream; no timestamp columns)
+	if has["Hash"] && has["OwnerSid"] && has["GroupSid"] && has["SaclAceCount"] {
+		return ToolMFTECmdSDS
+	}
+
+	// MFTECmd $J (USN journal; UpdateTimestamp is the unique discriminant)
+	if has["UpdateTimestamp"] && has["UpdateReasons"] {
+		return ToolMFTECmdJ
+	}
+
+	// MFTECmd $MFT
+	if has["EntryNumber"] && has["SequenceNumber"] && has["ParentEntryNumber"] && !has["UpdateTimestamp"] {
+		return ToolMFTECmdMFT
 	}
 
 	// SBECmd
 	if has["BagPath"] && has["AbsolutePath"] && has["ShellType"] && has["FirstInteracted"] {
 		return ToolSBECmd
+	}
+
+	// RBCmd ($Recycle.Bin)
+	if has["SourceName"] && has["FileType"] && has["FileName"] && has["FileSize"] && has["DeletedOn"] {
+		return ToolRBCmd
+	}
+
+	// AppCompatCacheParser (ShimCache)
+	if has["ControlSet"] && has["CacheEntryPosition"] && has["Path"] && has["LastModifiedTimeUTC"] && has["Executed"] && has["Duplicate"] {
+		return ToolAppCompatCacheParser
+	}
+
+	// WxTCmd Activity (Windows 10 Timeline)
+	if has["ActivityTypeOrg"] && has["ActivityType"] && has["Executable"] && has["StartTime"] && has["ETag"] {
+		return ToolWxTCmdActivity
+	}
+
+	// WxTCmd PackageIDs (lookup table; no forensic timestamps)
+	if has["Platform"] && has["AdditionalInformation"] && has["Expires"] && !has["PackageIdHash"] {
+		return ToolWxTCmdPackageIDs
 	}
 
 	return ""
@@ -355,12 +446,15 @@ func timestampColumnsForTool(tool string) []string {
 	case ToolJLECmdCustom:
 		return []string{"TargetCreated", "TargetModified", "TargetAccessed",
 			"SourceCreated", "SourceModified", "SourceAccessed", "TrackerCreatedOn"}
-	case ToolAmcacheUnassociatedFiles:
+	case ToolAmcacheUnassociatedFiles, ToolAmcacheAssociatedFileEntries:
 		return []string{"FileKeyLastWriteTimestamp", "LinkDate"}
+	case ToolAmcacheProgramEntries:
+		return []string{"KeyLastWriteTimestamp", "InstallDate", "InstallDateArpLastModified",
+			"InstallDateMsi", "InstallDateFromLinkFile"}
 	case ToolAmcacheDeviceContainers:
 		return []string{"KeyLastWriteTimestamp"}
 	case ToolAmcacheDevicePnps:
-		return []string{"KeyLastWriteTimestamp"}
+		return []string{"KeyLastWriteTimestamp", "DriverVerDate"}
 	case ToolAmcacheDriveBinaries:
 		return []string{"KeyLastWriteTimestamp", "DriverTimeStamp", "DriverLastWriteTime"}
 	case ToolAmcacheDriverPackages:
@@ -379,14 +473,41 @@ func timestampColumnsForTool(tool string) []string {
 		return []string{"Timestamp", "ExeTimestamp"}
 	case ToolSrumECmdVfuprov:
 		return []string{"Timestamp", "ExeTimestamp", "StartTime", "EndTime"}
-	case ToolMFTECmd:
-		return []string{"Created0x10", "Created0x30", "LastModified0x10", "LastModified0x30",
-			"LastRecordChange0x10", "LastRecordChange0x30", "LastAccess0x10", "LastAccess0x30"}
+	case ToolSrumECmdAppResourceUseInfo:
+		return []string{"Timestamp", "ExeTimestamp"}
+	case ToolRBCmd:
+		return []string{"DeletedOn"}
+	case ToolAppCompatCacheParser:
+		return []string{"LastModifiedTimeUTC"}
+	case ToolWxTCmdActivity:
+		return []string{"StartTime", "EndTime", "LastModifiedTime",
+			"LastModifiedOnClient", "OriginalLastModifiedOnClient"}
+	case ToolMFTECmdMFT:
+		return []string{"Created0x10", "LastModified0x10", "LastRecordChange0x10", "LastAccess0x10",
+			"Created0x30", "LastModified0x30", "LastRecordChange0x30", "LastAccess0x30"}
+	case ToolMFTECmdJ:
+		return []string{"UpdateTimestamp"}
 	case ToolSBECmd:
 		return []string{"CreatedOn", "ModifiedOn", "AccessedOn", "LastWriteTime",
 			"FirstInteracted", "LastInteracted"}
 	}
 	return nil
+}
+
+// macbForTool returns the MACB string for the given tool and timestamp column.
+// Most tools use the generic deriveMACB derivation. Tools with format-specific
+// conventions (e.g. WxTCmd) override per column.
+func macbForTool(tool, colName string) string {
+	switch tool {
+	case ToolWxTCmdActivity:
+		switch colName {
+		case "StartTime", "EndTime":
+			return "M..."
+		case "LastModifiedTime", "LastModifiedOnClient", "OriginalLastModifiedOnClient":
+			return ".AB."
+		}
+	}
+	return deriveMACB(colName)
 }
 
 // deriveMACB derives the MACB value from a timestamp column name.
@@ -406,9 +527,10 @@ func deriveMACB(colName string) string {
 		return "...B"
 	}
 
-	// Modified/LastRun/LastWrite types
+	// Modified/LastRun/LastWrite/Deleted types
 	if strings.Contains(lower, "modified") || strings.Contains(lower, "lastrun") ||
-		strings.Contains(lower, "previousrun") || strings.Contains(lower, "lastwrite") {
+		strings.Contains(lower, "previousrun") || strings.Contains(lower, "lastwrite") ||
+		strings.Contains(lower, "deleted") {
 		return "M..."
 	}
 
@@ -495,6 +617,9 @@ func isEmptyTimestamp(val string) bool {
 	if val == "" {
 		return true
 	}
+	if val == "NA" {
+		return true
+	}
 	if strings.HasPrefix(val, "0001-01-01") {
 		return true
 	}
@@ -520,9 +645,10 @@ func expandRow(tool string, row []string, colIndex map[string]int, header []stri
 		}
 
 		e := mapFieldsForTool(tool, row, colIndex, header, tsCol, tsColumns)
+		e.Source = strings.ToUpper(e.Source)
 		e.Datetime = dt
 		e.Type = tsCol
-		e.MACB = deriveMACB(tsCol)
+		e.MACB = macbForTool(tool, tsCol)
 		e.Timezone = "UTC"
 
 		events = append(events, e)
@@ -546,8 +672,10 @@ func mapFieldsForTool(tool string, row []string, colIndex map[string]int, header
 		mapJLECmdAutomatic(e, row, colIndex)
 	case ToolJLECmdCustom:
 		mapJLECmdCustom(e, row, colIndex)
-	case ToolAmcacheUnassociatedFiles:
+	case ToolAmcacheUnassociatedFiles, ToolAmcacheAssociatedFileEntries:
 		mapAmcacheUnassociatedFiles(e, row, colIndex)
+	case ToolAmcacheProgramEntries:
+		mapAmcacheProgramEntries(e, row, colIndex)
 	case ToolAmcacheDeviceContainers:
 		mapAmcacheDeviceContainers(e, row, colIndex)
 	case ToolAmcacheDevicePnps:
@@ -570,8 +698,18 @@ func mapFieldsForTool(tool string, row []string, colIndex map[string]int, header
 		mapSrumBase(e, row, colIndex, "SRUM Push Notification")
 	case ToolSrumECmdVfuprov:
 		mapSrumBase(e, row, colIndex, "SRUM VFU Provider")
-	case ToolMFTECmd:
-		mapMFTECmd(e, row, colIndex)
+	case ToolSrumECmdAppResourceUseInfo:
+		mapSrumBase(e, row, colIndex, "SRUM App Resource Use")
+	case ToolRBCmd:
+		mapRBCmd(e, row, colIndex)
+	case ToolAppCompatCacheParser:
+		mapAppCompatCacheParser(e, row, colIndex)
+	case ToolWxTCmdActivity:
+		mapWxTCmdActivity(e, row, colIndex)
+	case ToolMFTECmdMFT:
+		mapMFTECmdMFT(e, row, colIndex)
+	case ToolMFTECmdJ:
+		mapMFTECmdJ(e, row, colIndex)
 	case ToolSBECmd:
 		mapSBECmd(e, row, colIndex)
 	}
@@ -594,6 +732,18 @@ func firstNonEmpty(row []string, colIndex map[string]int, cols ...string) string
 		}
 	}
 	return ""
+}
+
+// joinNonEmpty builds a string by joining non-empty values of the given columns
+// with sep. Columns that are empty or missing are skipped.
+func joinNonEmpty(row []string, colIndex map[string]int, sep string, cols ...string) string {
+	var parts []string
+	for _, col := range cols {
+		if v := colVal(row, colIndex, col); v != "" {
+			parts = append(parts, v)
+		}
+	}
+	return strings.Join(parts, sep)
 }
 
 func mapEvtxECmd(e *model.Event, row []string, colIndex map[string]int) {
@@ -665,37 +815,42 @@ func mapAmcacheUnassociatedFiles(e *model.Event, row []string, colIndex map[stri
 }
 
 func mapAmcacheDeviceContainers(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "AMCACHE"
-	e.SourceType = "Amcache Device Container"
-	e.Desc = colVal(row, colIndex, "FriendlyName")
+	e.Source = "Amcache"
+	e.SourceType = "Amcache DeviceContainers"
+	e.Desc = firstNonEmpty(row, colIndex, "FriendlyName", "KeyName")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "Manufacturer", "ModelName", "ModelNumber")
 	e.Format = "eztool_amcacheparser"
 }
 
 func mapAmcacheDevicePnps(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "AMCACHE"
-	e.SourceType = "Amcache Device PnP"
-	e.Desc = firstNonEmpty(row, colIndex, "Description", "BusReportedDescription")
+	e.Source = "Amcache"
+	e.SourceType = "Amcache DevicePnps"
+	e.Desc = firstNonEmpty(row, colIndex, "Description", "KeyName")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "Class", "Manufacturer", "DriverName", "DriverVerVersion")
 	e.Format = "eztool_amcacheparser"
 }
 
 func mapAmcacheDriveBinaries(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "AMCACHE"
-	e.SourceType = "Amcache Drive Binary"
+	e.Source = "Amcache"
+	e.SourceType = "Amcache DriveBinaries"
 	e.Desc = colVal(row, colIndex, "DriverName")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "DriverCompany", "DriverVersion", "Product", "ProductVersion")
 	e.Format = "eztool_amcacheparser"
 }
 
 func mapAmcacheDriverPackages(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "AMCACHE"
-	e.SourceType = "Amcache Driver Package"
-	e.Desc = colVal(row, colIndex, "Inf")
+	e.Source = "Amcache"
+	e.SourceType = "Amcache DriverPackages"
+	e.Desc = firstNonEmpty(row, colIndex, "Inf", "KeyName")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "Class", "Provider", "Version", "Directory")
 	e.Format = "eztool_amcacheparser"
 }
 
 func mapAmcacheShortCuts(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "AMCACHE"
-	e.SourceType = "Amcache ShortCut"
+	e.Source = "Amcache"
+	e.SourceType = "Amcache ShortCuts"
 	e.Desc = colVal(row, colIndex, "LnkName")
+	e.Notes = colVal(row, colIndex, "KeyName")
 	e.Format = "eztool_amcacheparser"
 }
 
@@ -711,20 +866,27 @@ func mapSrumBase(e *model.Event, row []string, colIndex map[string]int, sourceTy
 	e.Notes = colVal(row, colIndex, "ExeInfoDescription")
 }
 
-func mapMFTECmd(e *model.Event, row []string, colIndex map[string]int) {
-	e.Source = "MFT"
-	e.SourceType = "NTFS MFT Entry"
-	parentPath := colVal(row, colIndex, "ParentPath")
-	fileName := colVal(row, colIndex, "FileName")
-	if parentPath != "" && fileName != "" {
-		e.Desc = parentPath + `\` + fileName
-	} else if parentPath != "" {
-		e.Desc = parentPath
-	} else {
-		e.Desc = fileName
-	}
-	e.Filename = colVal(row, colIndex, "SourceFile")
-	e.Inode = colVal(row, colIndex, "EntryNumber")
+func mapAmcacheProgramEntries(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "Amcache"
+	e.SourceType = "Amcache ProgramEntries"
+	e.Desc = firstNonEmpty(row, colIndex, "Name", "ProgramName")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "Publisher", "Version", "Type")
+	e.Format = "eztool_amcacheparser"
+}
+
+func mapMFTECmdMFT(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "FileSystem"
+	e.SourceType = "MFT"
+	e.Desc = firstNonEmpty(row, colIndex, "FileName", "Name")
+	e.Filename = colVal(row, colIndex, "ParentPath")
+	e.Format = "eztool_mftecmd"
+}
+
+func mapMFTECmdJ(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "FileSystem"
+	e.SourceType = "MFT Journal"
+	e.Desc = colVal(row, colIndex, "Name")
+	e.Filename = colVal(row, colIndex, "ParentPath")
 	e.Format = "eztool_mftecmd"
 }
 
@@ -733,6 +895,33 @@ func mapSBECmd(e *model.Event, row []string, colIndex map[string]int) {
 	e.SourceType = "Shellbag Entry"
 	e.Desc = colVal(row, colIndex, "AbsolutePath")
 	e.Format = "eztool_sbecmd"
+}
+
+func mapRBCmd(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "FileSystem"
+	e.SourceType = "$Recycle.Bin"
+	e.Desc = colVal(row, colIndex, "FileName")
+	e.Filename = colVal(row, colIndex, "SourceName")
+	e.Notes = colVal(row, colIndex, "FileType")
+	e.Format = "eztool_rbcmd"
+}
+
+func mapAppCompatCacheParser(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "Registry"
+	e.SourceType = "AppCompatCache"
+	e.Desc = colVal(row, colIndex, "Path")
+	e.Filename = colVal(row, colIndex, "SourceFile")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "ControlSet", "CacheEntryPosition")
+	e.Format = "eztool_appcompatcacheparser"
+}
+
+func mapWxTCmdActivity(e *model.Event, row []string, colIndex map[string]int) {
+	e.Source = "WindowsTimeline"
+	e.SourceType = "Windows 10 Timeline"
+	e.Desc = firstNonEmpty(row, colIndex, "DisplayText", "Executable")
+	e.Notes = joinNonEmpty(row, colIndex, "; ", "Executable", "ActivityType", "DevicePlatform")
+	e.User = colVal(row, colIndex, "TimeZone")
+	e.Format = "eztool_wxtcmd"
 }
 
 // extraColumnsForTool returns the tool-specific columns that should be included in extra.
@@ -749,26 +938,39 @@ func extraColumnsForTool(tool string) []string {
 			"Hostname", "MacAddress", "MachineID", "MachineMACAddress", "Arguments"}
 	case ToolJLECmdCustom:
 		return []string{"AppId", "EntryName", "MachineID", "MachineMACAddress", "Arguments"}
-	case ToolAmcacheUnassociatedFiles:
+	case ToolAmcacheUnassociatedFiles, ToolAmcacheAssociatedFileEntries:
 		return []string{"SHA1", "ApplicationName", "ProgramId", "Size", "Version",
 			"ProductVersion", "ProductName", "BinaryType", "Language", "Description", "FileExtension"}
+	case ToolAmcacheProgramEntries:
+		return []string{"ProgramId", "Language", "Source", "RootDirPath", "UninstallString"}
 	case ToolAmcacheDeviceContainers:
-		return []string{"KeyName", "Categories", "DiscoveryMethod", "Manufacturer",
-			"ModelName", "ModelNumber", "IsActive", "IsConnected", "IsNetworked"}
+		return []string{"Categories", "PrimaryCategory", "State", "IsActive", "IsConnected",
+			"IsPaired", "IsNetworked", "IsMachineContainer"}
 	case ToolAmcacheDevicePnps:
-		return []string{"KeyName", "Class", "ClassGuid", "DriverName", "Manufacturer",
-			"Provider", "Service", "Enumerator"}
+		return []string{"ClassGuid", "Compid", "ContainerId", "DriverId", "DriverPackageStrongName",
+			"Enumerator", "HWID", "Inf", "InstallState", "MatchingId", "Model", "Provider",
+			"Service", "Stackid", "ProblemCode"}
 	case ToolAmcacheDriveBinaries:
-		return []string{"KeyName", "DriverCompany", "DriverVersion", "Product",
-			"ProductVersion", "Service", "DriverCheckSum", "ImageSize"}
+		return []string{"DriverInBox", "DriverIsKernelMode", "DriverSigned", "DriverCheckSum",
+			"DriverId", "DriverPackageStrongName", "DriverType", "ImageSize", "Inf", "Service",
+			"WdfVersion"}
 	case ToolAmcacheDriverPackages:
-		return []string{"KeyName", "Class", "Directory", "Provider", "Version", "Hwids"}
+		return []string{"DriverInBox", "Hwids", "SubmissionId", "SYSFILE"}
 	case ToolAmcacheShortCuts:
-		return []string{"KeyName"}
-	case ToolMFTECmd:
+		return nil
+	case ToolRBCmd:
+		return []string{"FileSize"}
+	case ToolAppCompatCacheParser:
+		return []string{"Executed", "Duplicate"}
+	case ToolWxTCmdActivity:
+		return []string{"Duration", "IsLocalOnly", "CreatedInCloud", "ETag"}
+	case ToolMFTECmdMFT:
 		return []string{"SequenceNumber", "InUse", "FileSize", "Extension", "IsDirectory",
 			"HasAds", "IsAds", "Copied", "SiFlags", "NameType", "ReferenceCount",
 			"SecurityId", "UpdateSequenceNumber", "ZoneIdContents"}
+	case ToolMFTECmdJ:
+		return []string{"UpdateReasons", "EntryNumber", "SequenceNumber",
+			"ParentEntryNumber", "ParentSequenceNumber"}
 	case ToolSBECmd:
 		return []string{"BagPath", "ShellType", "Value", "Slot", "NodeSlot", "MRUPosition",
 			"MFTEntry", "MFTSequenceNumber", "HasExplored", "Miscellaneous"}
@@ -788,6 +990,9 @@ func extraColumnsForTool(tool string) []string {
 		return []string{"NetworkType", "NotificationType", "PayloadSize"}
 	case ToolSrumECmdVfuprov:
 		return []string{"Flags", "Duration"}
+	case ToolSrumECmdAppResourceUseInfo:
+		return []string{"BackgroundBytesRead", "BackgroundBytesWritten", "ForegroundBytesRead",
+			"ForegroundBytesWritten", "FaceTime"}
 	}
 
 	return nil
@@ -809,23 +1014,34 @@ func mappedColumnsForTool(tool string) []string {
 		return []string{"Path", "LocalPath", "TargetIDAbsolutePath", "SourceFile", "AppIdDescription"}
 	case ToolJLECmdCustom:
 		return []string{"LocalPath", "TargetIDAbsolutePath", "SourceFile", "AppIdDescription"}
-	case ToolAmcacheUnassociatedFiles:
+	case ToolAmcacheUnassociatedFiles, ToolAmcacheAssociatedFileEntries:
 		return []string{"FullPath", "Name"}
+	case ToolAmcacheProgramEntries:
+		return []string{"Name", "ProgramName", "Publisher", "Version", "Type"}
 	case ToolAmcacheDeviceContainers:
-		return []string{"FriendlyName"}
+		return []string{"KeyName", "FriendlyName", "Manufacturer", "ModelName", "ModelNumber"}
 	case ToolAmcacheDevicePnps:
-		return []string{"Description", "BusReportedDescription"}
+		return []string{"KeyName", "Description", "Class", "Manufacturer", "DriverName", "DriverVerVersion"}
 	case ToolAmcacheDriveBinaries:
-		return []string{"DriverName"}
+		return []string{"DriverName", "DriverCompany", "DriverVersion", "Product", "ProductVersion"}
 	case ToolAmcacheDriverPackages:
-		return []string{"Inf"}
+		return []string{"KeyName", "Inf", "Class", "Provider", "Version", "Directory"}
 	case ToolAmcacheShortCuts:
-		return []string{"LnkName"}
+		return []string{"KeyName", "LnkName"}
 	case ToolSrumECmdAppTimeline, ToolSrumECmdEnergyUsage, ToolSrumECmdNetworkConnections,
-		ToolSrumECmdNetworkUsages, ToolSrumECmdPushNotifications, ToolSrumECmdVfuprov:
+		ToolSrumECmdNetworkUsages, ToolSrumECmdPushNotifications, ToolSrumECmdVfuprov,
+		ToolSrumECmdAppResourceUseInfo:
 		return []string{"ExeInfo", "UserName", "Sid", "ExeInfoDescription"}
-	case ToolMFTECmd:
-		return []string{"ParentPath", "FileName", "SourceFile", "EntryNumber"}
+	case ToolRBCmd:
+		return []string{"SourceName", "FileName", "FileType"}
+	case ToolAppCompatCacheParser:
+		return []string{"Path", "SourceFile", "ControlSet", "CacheEntryPosition"}
+	case ToolWxTCmdActivity:
+		return []string{"DisplayText", "Executable", "ActivityType", "DevicePlatform", "TimeZone"}
+	case ToolMFTECmdMFT:
+		return []string{"FileName", "Name", "ParentPath"}
+	case ToolMFTECmdJ:
+		return []string{"Name", "ParentPath"}
 	case ToolSBECmd:
 		return []string{"AbsolutePath"}
 	}

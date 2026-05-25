@@ -3,6 +3,7 @@ package eztoolparser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cdtdelta/4n6time/internal/database"
@@ -13,6 +14,10 @@ import (
 // LECmd detection requires: SourceFile, TargetCreated, TargetModified, LocalPath, DriveType.
 const minimalLECmdCSV = "SourceFile,TargetCreated,TargetModified,LocalPath,DriveType\n" +
 	"test.lnk,2026-01-01 00:00:00,2026-01-02 00:00:00,C:\\path\\to\\file,Fixed\n"
+
+// minimalMFTECmdBootCSV is a $Boot CSV with the distinguishing header columns and no timestamps.
+const minimalMFTECmdBootCSV = "EntryPoint,Signature,BytesPerSector,SectorsPerCluster,MFTCluster\n" +
+	"0,NTFS,512,8,786432\n"
 
 // mockStore records insertions and stubs out all other Store methods.
 type mockStore struct {
@@ -234,6 +239,47 @@ func TestImportFolderRecursiveMixedTree(t *testing.T) {
 	// Progress callback must have been called once per processed file.
 	if progressCalls != 2 {
 		t.Errorf("progress callback calls = %d, want 2", progressCalls)
+	}
+}
+
+// TestImportFolderRecursiveNoTimestampSkip verifies that a recognized format
+// with no timestamp columns (e.g. MFTECmd $Boot) is skipped with a clear
+// reason rather than counted as a processed file or treated as unknown.
+func TestImportFolderRecursiveNoTimestampSkip(t *testing.T) {
+	root := t.TempDir()
+
+	// $Boot: recognized but has no timestamp columns.
+	writeTmpCSV(t, root, "MFTECmd_$Boot_Output.csv", minimalMFTECmdBootCSV)
+
+	store := &mockStore{}
+	summary, err := ImportFolderRecursive(root, store, nil)
+	if err != nil {
+		t.Fatalf("ImportFolderRecursive: %v", err)
+	}
+
+	if summary.TotalFilesProcessed != 0 {
+		t.Errorf("TotalFilesProcessed = %d, want 0 ($Boot should not count as processed)", summary.TotalFilesProcessed)
+	}
+	if store.insertedCount != 0 {
+		t.Errorf("insertedCount = %d, want 0 (no events should be inserted)", store.insertedCount)
+	}
+
+	var found bool
+	for _, sf := range summary.SkippedFiles {
+		if sf.RelativePath == "MFTECmd_$Boot_Output.csv" &&
+			strings.Contains(sf.Reason, "no timestamp columns") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected $Boot file in SkippedFiles with 'no timestamp columns' reason; got: %v",
+			summary.SkippedFiles)
+	}
+
+	// Must not appear under PerTool.
+	if _, ok := summary.PerTool[ToolMFTECmdBoot]; ok {
+		t.Error("$Boot file must not appear in PerTool map")
 	}
 }
 

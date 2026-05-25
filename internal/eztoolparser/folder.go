@@ -92,15 +92,34 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 			return nil
 		}
 
-		result, parseErr := ReadEvents(path, nil)
-		if parseErr != nil {
-			reason := SkipReasonUnrecognizedFormat
-			if !strings.Contains(parseErr.Error(), "not a recognized EZ Tool CSV") {
-				reason = SkipReasonParseError + parseErr.Error()
-			}
+		toolName, detectErr := DetectTool(path)
+		if detectErr != nil {
 			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
 				RelativePath: rel,
-				Reason:       reason,
+				Reason:       SkipReasonParseError + detectErr.Error(),
+			})
+			return nil
+		}
+		if toolName == "" {
+			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
+				RelativePath: rel,
+				Reason:       SkipReasonUnrecognizedFormat,
+			})
+			return nil
+		}
+		if _, isNoTimestamp := NoTimestampFormats[toolName]; isNoTimestamp {
+			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
+				RelativePath: rel,
+				Reason:       fmt.Sprintf("no timestamp columns (recognized as %s): no timeline data to import", toolName),
+			})
+			return nil
+		}
+
+		result, parseErr := ReadEvents(path, nil)
+		if parseErr != nil {
+			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
+				RelativePath: rel,
+				Reason:       SkipReasonParseError + parseErr.Error(),
 			})
 			return nil
 		}

@@ -1,0 +1,82 @@
+name: New Parser Request
+description: Request support for an EZ Tools output format not currently handled by the recursive import.
+title: "Parser request: [Tool Name]"
+labels: ["enhancement", "parser"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form to request support for an EZ Tools output format that currently shows up in the
+        skipped-files list during a recursive folder import. A sample CSV file is required -- without
+        one, there is nothing to work from.
+
+        **Before submitting:** Please sanitize the file. Replace real hostnames, usernames, SIDs,
+        and file paths with placeholder values. A few dozen rows is plenty.
+
+  - type: input
+    id: tool_name
+    attributes:
+      label: Tool name
+      description: Which EZ Tool generates this file? Include the version if you know it.
+      placeholder: "e.g. RBCmd v0.5.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: filename_pattern
+    attributes:
+      label: Typical filename
+      description: What does the output file usually look like? Wildcards are fine.
+      placeholder: "e.g. $Recycle.Bin_*.csv or dyarr_Activity*.csv"
+    validations:
+      required: true
+
+  - type: textarea
+    id: artifact_description
+    attributes:
+      label: What does this artifact represent?
+      description: Brief description of the forensic artifact the tool parses. This helps with choosing source/sourcetype values and MACB derivation.
+      placeholder: "e.g. Recycle Bin deletion records -- each row is a deleted file entry with original path and deletion timestamp."
+    validations:
+      required: true
+
+  - type: textarea
+    id: timestamp_columns
+    attributes:
+      label: Timestamp columns
+      description: List the timestamp column names and what they represent. Note which ones are forensically significant (deletion time, creation time, execution time, etc.).
+      placeholder: |
+        - DeletedOn: when the file was deleted (most significant)
+        - SourceCreated: original file $STANDARD_INFORMATION Created timestamp
+        - SourceModified: original file $STANDARD_INFORMATION Modified timestamp
+        - SourceAccessed: original file $STANDARD_INFORMATION Accessed timestamp
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: verified_skipped
+    attributes:
+      label: Confirmed skipped during import?
+      description: Check this if you have seen this file appear in the skipped-files list in the recursive import summary dialog.
+      options:
+        - label: Yes, this file shows up as skipped during "Import Folder (Recursive)"
+
+  - type: textarea
+    id: header_row
+    attributes:
+      label: Header row (paste here)
+      description: Paste the first line of the CSV -- the column headers. This is the single most useful thing you can provide.
+      render: text
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## Sample file (required)
+
+        Attach a sanitized sample CSV below. Drag and drop directly into this text box, or use the
+        paperclip icon. A few dozen rows is enough -- you do not need to attach the full file.
+
+        GitHub only accepts certain file types as attachments. If it rejects the `.csv` extension,
+        rename it to `.txt` before attaching and note that in a comment.

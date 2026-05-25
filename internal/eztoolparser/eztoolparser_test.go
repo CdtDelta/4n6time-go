@@ -191,13 +191,13 @@ func TestDetectSrumECmdVfuprov(t *testing.T) {
 	}
 }
 
-func TestDetectMFTECmd(t *testing.T) {
+func TestDetectMFTECmdMFT(t *testing.T) {
 	res, err := ReadEvents(testFile("mftecmd_sample.csv"), nil)
 	if err != nil {
 		t.Fatalf("ReadEvents failed: %v", err)
 	}
-	if res.Tool != ToolMFTECmd {
-		t.Errorf("expected tool %q, got %q", ToolMFTECmd, res.Tool)
+	if res.Tool != ToolMFTECmdMFT {
+		t.Errorf("expected tool %q, got %q", ToolMFTECmdMFT, res.Tool)
 	}
 }
 
@@ -208,6 +208,75 @@ func TestDetectSBECmd(t *testing.T) {
 	}
 	if res.Tool != ToolSBECmd {
 		t.Errorf("expected tool %q, got %q", ToolSBECmd, res.Tool)
+	}
+}
+
+func TestDetectMFTECmdBoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MFTECmd_$Boot_Output.csv")
+	content := "EntryPoint,Signature,BytesPerSector,SectorsPerCluster,MFTCluster,VolumeSize,VolumeSerialNumber\n" +
+		"0,NTFS,512,8,786432,976773120,4A5E3C2D1B6F\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolMFTECmdBoot {
+		t.Errorf("expected tool %q, got %q", ToolMFTECmdBoot, tool)
+	}
+}
+
+func TestDetectMFTECmdSDS(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MFTECmd_$SDS_Output.csv")
+	content := "Hash,Offset,Length,OwnerSid,GroupSid,SaclAceCount,DaclAceCount\n" +
+		"3F2A1B4C,0,168,S-1-5-32-544,S-1-5-18,0,2\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolMFTECmdSDS {
+		t.Errorf("expected tool %q, got %q", ToolMFTECmdSDS, tool)
+	}
+}
+
+func TestNoTimestampFormatsContainsBoot(t *testing.T) {
+	if _, ok := NoTimestampFormats[ToolMFTECmdBoot]; !ok {
+		t.Errorf("NoTimestampFormats missing %q", ToolMFTECmdBoot)
+	}
+}
+
+func TestNoTimestampFormatsContainsSDS(t *testing.T) {
+	if _, ok := NoTimestampFormats[ToolMFTECmdSDS]; !ok {
+		t.Errorf("NoTimestampFormats missing %q", ToolMFTECmdSDS)
+	}
+}
+
+func TestMFTECmdBootReadEventsZeroEvents(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MFTECmd_$Boot_Output.csv")
+	content := "EntryPoint,Signature,BytesPerSector,SectorsPerCluster,MFTCluster\n" +
+		"0,NTFS,512,8,786432\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolMFTECmdBoot {
+		t.Errorf("expected tool %q, got %q", ToolMFTECmdBoot, res.Tool)
+	}
+	if len(res.Events) != 0 {
+		t.Errorf("expected 0 events for $Boot, got %d", len(res.Events))
 	}
 }
 
@@ -390,21 +459,22 @@ func TestMFTECmdFieldMapping(t *testing.T) {
 	}
 
 	e := res.Events[0]
-	if e.Source != "MFT" {
-		t.Errorf("source = %q, want MFT", e.Source)
+	if e.Source != "FILESYSTEM" {
+		t.Errorf("source = %q, want FILESYSTEM", e.Source)
 	}
-	if e.SourceType != "NTFS MFT Entry" {
-		t.Errorf("sourcetype = %q, want NTFS MFT Entry", e.SourceType)
+	if e.SourceType != "MFT" {
+		t.Errorf("sourcetype = %q, want MFT", e.SourceType)
 	}
 	if e.Format != "eztool_mftecmd" {
 		t.Errorf("format = %q, want eztool_mftecmd", e.Format)
 	}
-	// desc should be ParentPath\FileName
-	if !strings.Contains(e.Desc, `\`) && e.Desc != "" {
-		t.Errorf("desc should contain backslash separator, got %q", e.Desc)
+	// desc should be the FileName column value (e.g. "$MFT")
+	if e.Desc == "" {
+		t.Error("expected non-empty desc (FileName)")
 	}
-	if e.Inode == "" {
-		t.Error("expected inode (EntryNumber) to be set")
+	// Filename should be the ParentPath column value
+	if e.Filename == "" {
+		t.Error("expected non-empty filename (ParentPath)")
 	}
 }
 
@@ -439,7 +509,7 @@ func TestBOMHandling(t *testing.T) {
 	}{
 		{"evtxcmd_application.csv", ToolEvtxECmd},
 		{"20260320205219_SrumECmd_AppTimelineProvider_Output.csv", ToolSrumECmdAppTimeline},
-		{"mftecmd_sample.csv", ToolMFTECmd},
+		{"mftecmd_sample.csv", ToolMFTECmdMFT},
 		{"SBECmd_usrClass.csv", ToolSBECmd},
 	}
 
@@ -604,5 +674,759 @@ func TestProgressCallback(t *testing.T) {
 
 	if !called {
 		t.Error("expected progress callback to be called for large file")
+	}
+}
+
+// --- Amcache subtype round-trip tests ---
+
+func TestAmcacheDeviceContainersRoundTrip(t *testing.T) {
+	res, err := ReadEvents(testFile("amcache-testing_DeviceContainers.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheDeviceContainers {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheDeviceContainers)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache DeviceContainers" {
+		t.Errorf("sourcetype = %q, want Amcache DeviceContainers", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	// All events must come from KeyLastWriteTimestamp (only timestamp column).
+	for _, ev := range res.Events {
+		if ev.Type != "KeyLastWriteTimestamp" {
+			t.Errorf("unexpected event type %q (only KeyLastWriteTimestamp expected)", ev.Type)
+		}
+	}
+	// Desc must be non-empty (FriendlyName or KeyName fallback).
+	if e.Desc == "" {
+		t.Error("expected non-empty desc")
+	}
+}
+
+func TestAmcacheDevicePnpsRoundTrip(t *testing.T) {
+	res, err := ReadEvents(testFile("amcache-testing_DevicePnps.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheDevicePnps {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheDevicePnps)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache DevicePnps" {
+		t.Errorf("sourcetype = %q, want Amcache DevicePnps", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	// Desc must be non-empty (Description or KeyName fallback).
+	if e.Desc == "" {
+		t.Error("expected non-empty desc")
+	}
+	// Notes should be non-empty for rows where Class/Manufacturer/DriverName/DriverVerVersion have values.
+	if e.Notes == "" {
+		t.Error("expected non-empty notes (Class, Manufacturer, DriverName, DriverVerVersion)")
+	}
+}
+
+func TestAmcacheDriveBinariesRoundTrip(t *testing.T) {
+	res, err := ReadEvents(testFile("amcache-testing_DriveBinaries.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheDriveBinaries {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheDriveBinaries)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache DriveBinaries" {
+		t.Errorf("sourcetype = %q, want Amcache DriveBinaries", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	// DriveBinaries has three timestamp columns; rows with all three populated
+	// should produce three events. Verify at least two distinct types are present.
+	types := make(map[string]bool)
+	for _, ev := range res.Events {
+		types[ev.Type] = true
+	}
+	for _, want := range []string{"KeyLastWriteTimestamp", "DriverTimeStamp", "DriverLastWriteTime"} {
+		if !types[want] {
+			t.Errorf("expected event type %q to be present", want)
+		}
+	}
+}
+
+func TestAmcacheDriverPackagesRoundTrip(t *testing.T) {
+	res, err := ReadEvents(testFile("amcache-testing_DriverPackages.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheDriverPackages {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheDriverPackages)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache DriverPackages" {
+		t.Errorf("sourcetype = %q, want Amcache DriverPackages", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	// DriverPackages has two timestamp columns; verify both types appear.
+	types := make(map[string]bool)
+	for _, ev := range res.Events {
+		types[ev.Type] = true
+	}
+	for _, want := range []string{"KeyLastWriteTimestamp", "Date"} {
+		if !types[want] {
+			t.Errorf("expected event type %q to be present", want)
+		}
+	}
+	// Desc must be non-empty (Inf or KeyName fallback).
+	if e.Desc == "" {
+		t.Error("expected non-empty desc")
+	}
+}
+
+func TestAmcacheShortCutsRoundTrip(t *testing.T) {
+	res, err := ReadEvents(testFile("amcache-testing_ShortCuts.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheShortCuts {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheShortCuts)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache ShortCuts" {
+		t.Errorf("sourcetype = %q, want Amcache ShortCuts", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	// All events from KeyLastWriteTimestamp only.
+	for _, ev := range res.Events {
+		if ev.Type != "KeyLastWriteTimestamp" {
+			t.Errorf("unexpected event type %q", ev.Type)
+		}
+	}
+	if e.Desc == "" {
+		t.Error("expected non-empty desc (LnkName)")
+	}
+	if e.Notes == "" {
+		t.Error("expected non-empty notes (KeyName)")
+	}
+}
+
+// --- RBCmd tests ---
+
+func TestDetectRBCmd(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "RBCmd_Output.csv")
+	content := "SourceName,FileType,FileName,FileSize,DeletedOn\n" +
+		"$IABCD1234.docx,$I,ImportantDoc.docx,45678,2022-12-25 23:06:03\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolRBCmd {
+		t.Errorf("expected tool %q, got %q", ToolRBCmd, tool)
+	}
+}
+
+func TestRBCmdRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "RBCmd_Output.csv")
+	content := "SourceName,FileType,FileName,FileSize,DeletedOn\n" +
+		"$IABCD1234.docx,$I,ImportantDoc.docx,45678,2022-12-25 23:06:03\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolRBCmd {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolRBCmd)
+	}
+	if res.Count != 1 {
+		t.Fatalf("expected 1 event, got %d", res.Count)
+	}
+	e := res.Events[0]
+	if e.Source != "FILESYSTEM" {
+		t.Errorf("source = %q, want FILESYSTEM", e.Source)
+	}
+	if e.SourceType != "$Recycle.Bin" {
+		t.Errorf("sourcetype = %q, want $Recycle.Bin", e.SourceType)
+	}
+	if e.Format != "eztool_rbcmd" {
+		t.Errorf("format = %q, want eztool_rbcmd", e.Format)
+	}
+	if e.Desc != "ImportantDoc.docx" {
+		t.Errorf("desc = %q, want ImportantDoc.docx", e.Desc)
+	}
+	if e.Type != "DeletedOn" {
+		t.Errorf("type = %q, want DeletedOn", e.Type)
+	}
+	if e.Datetime != "2022-12-25 23:06:03" {
+		t.Errorf("datetime = %q, want 2022-12-25 23:06:03", e.Datetime)
+	}
+	if e.MACB != "M..." {
+		t.Errorf("MACB = %q, want M...", e.MACB)
+	}
+}
+
+func TestRBCmdSkipsEmptyDeletedOn(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "RBCmd_Output.csv")
+	content := "SourceName,FileType,FileName,FileSize,DeletedOn\n" +
+		"$IABCD1234.docx,$I,ImportantDoc.docx,45678,2022-12-25 23:06:03\n" +
+		"$IXXXX9999.png,$I,Photo.png,102400,\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	// Only the first row has a DeletedOn value; the second must be skipped.
+	if res.Count != 1 {
+		t.Errorf("expected 1 event (empty DeletedOn row skipped), got %d", res.Count)
+	}
+}
+
+// --- AppCompatCacheParser tests ---
+
+func TestDetectAppCompatCacheParser(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "AppCompatCacheParser_Output.csv")
+	content := "SourceFile,ControlSet,CacheEntryPosition,Path,LastModifiedTimeUTC,Executed,Duplicate\n" +
+		"shimcache.bin,ControlSet001,0,C:\\Windows\\System32\\svchost.exe,2026-04-02 00:41:02,Yes,False\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolAppCompatCacheParser {
+		t.Errorf("expected tool %q, got %q", ToolAppCompatCacheParser, tool)
+	}
+}
+
+func TestAppCompatCacheParserRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "AppCompatCacheParser_Output.csv")
+	content := "SourceFile,ControlSet,CacheEntryPosition,Path,LastModifiedTimeUTC,Executed,Duplicate\n" +
+		"shimcache.bin,ControlSet001,0,C:\\Windows\\System32\\svchost.exe,2026-04-02 00:41:02,Yes,False\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAppCompatCacheParser {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAppCompatCacheParser)
+	}
+	if res.Count != 1 {
+		t.Fatalf("expected 1 event, got %d", res.Count)
+	}
+	e := res.Events[0]
+	if e.Source != "REGISTRY" {
+		t.Errorf("source = %q, want REGISTRY", e.Source)
+	}
+	if e.SourceType != "AppCompatCache" {
+		t.Errorf("sourcetype = %q, want AppCompatCache", e.SourceType)
+	}
+	if e.Format != "eztool_appcompatcacheparser" {
+		t.Errorf("format = %q, want eztool_appcompatcacheparser", e.Format)
+	}
+	if e.Desc != `C:\Windows\System32\svchost.exe` {
+		t.Errorf("desc = %q, want C:\\Windows\\System32\\svchost.exe", e.Desc)
+	}
+	if e.Type != "LastModifiedTimeUTC" {
+		t.Errorf("type = %q, want LastModifiedTimeUTC", e.Type)
+	}
+	if e.Datetime != "2026-04-02 00:41:02" {
+		t.Errorf("datetime = %q, want 2026-04-02 00:41:02", e.Datetime)
+	}
+	if !strings.Contains(e.Notes, "ControlSet001") {
+		t.Errorf("notes = %q, expected ControlSet001", e.Notes)
+	}
+}
+
+func TestAppCompatCacheParserSkipsNAAndEmpty(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "AppCompatCacheParser_Output.csv")
+	content := "SourceFile,ControlSet,CacheEntryPosition,Path,LastModifiedTimeUTC,Executed,Duplicate\n" +
+		"shimcache.bin,ControlSet001,0,C:\\Windows\\System32\\svchost.exe,2026-04-02 00:41:02,Yes,False\n" +
+		"shimcache.bin,ControlSet001,1,C:\\test.exe,NA,Yes,False\n" +
+		"shimcache.bin,ControlSet001,2,C:\\another.exe,,Yes,False\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	// Only the first row has a parseable timestamp; NA and empty rows must be skipped.
+	if res.Count != 1 {
+		t.Errorf("expected 1 event (NA and empty rows skipped), got %d", res.Count)
+	}
+}
+
+// --- SrumECmd AppResourceUseInfo tests ---
+
+func TestDetectSrumECmdAppResourceUseInfo(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "SrumECmd_AppResourceUseInfo_Output.csv")
+	content := "Id,Timestamp,ExeInfo,SidType,UserName,Sid,ExeInfoDescription," +
+		"BackgroundBytesRead,BackgroundBytesWritten,ForegroundBytesRead,ForegroundBytesWritten,FaceTime\n" +
+		"1,2026-04-26 18:42:46.8517087,C:\\test.exe,UserSid,TestUser,S-1-5-21-123,Test App," +
+		"1024,512,2048,1536,3000\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolSrumECmdAppResourceUseInfo {
+		t.Errorf("expected tool %q, got %q", ToolSrumECmdAppResourceUseInfo, tool)
+	}
+}
+
+func TestSrumECmdAppResourceUseInfoRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "SrumECmd_AppResourceUseInfo_Output.csv")
+	content := "Id,Timestamp,ExeInfo,SidType,UserName,Sid,ExeInfoDescription," +
+		"BackgroundBytesRead,BackgroundBytesWritten,ForegroundBytesRead,ForegroundBytesWritten,FaceTime\n" +
+		"1,2026-04-26 18:42:46.8517087,C:\\test.exe,UserSid,TestUser,S-1-5-21-123,Test App," +
+		"1024,512,2048,1536,3000\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolSrumECmdAppResourceUseInfo {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolSrumECmdAppResourceUseInfo)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	e := res.Events[0]
+	if e.Source != "SRUM" {
+		t.Errorf("source = %q, want SRUM", e.Source)
+	}
+	if e.SourceType != "SRUM App Resource Use" {
+		t.Errorf("sourcetype = %q, want SRUM App Resource Use", e.SourceType)
+	}
+	if e.Format != "eztool_srumecmd" {
+		t.Errorf("format = %q, want eztool_srumecmd", e.Format)
+	}
+	if e.Desc != `C:\test.exe` {
+		t.Errorf("desc = %q, want C:\\test.exe", e.Desc)
+	}
+	if e.Type != "Timestamp" {
+		t.Errorf("type = %q, want Timestamp", e.Type)
+	}
+	// Extra must contain AppResourceUseInfo-specific fields.
+	if !strings.Contains(e.Extra, "BackgroundBytesRead") {
+		t.Errorf("extra = %q, expected BackgroundBytesRead", e.Extra)
+	}
+}
+
+// --- AmcacheParser AssociatedFileEntries tests ---
+
+func TestDetectAmcacheAssociatedFileEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Filename contains "associatedfile" (but not "unassociated") — must detect as Associated.
+	path := filepath.Join(tmpDir, "amcache-testing_AssociatedFileEntries.csv")
+	content := "ApplicationName,ProgramId,SHA1,FileKeyLastWriteTimestamp,FullPath,LinkDate\n" +
+		"TestApp,{abc},da39a3ee5e,2026-01-15 10:00:00,C:\\test.exe,2026-01-01 00:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolAmcacheAssociatedFileEntries {
+		t.Errorf("expected tool %q, got %q", ToolAmcacheAssociatedFileEntries, tool)
+	}
+}
+
+func TestDetectAmcacheUnassociatedFileEntriesStillWorks(t *testing.T) {
+	// The existing testdata filename "amcache-testing_UnassociatedFileEntries.csv" contains
+	// "unassociated", so it must still resolve to ToolAmcacheUnassociatedFiles even though
+	// "unassociatedfileentries" contains "associatedfile" as a substring.
+	res, err := ReadEvents(testFile("amcache-testing_UnassociatedFileEntries.csv"), nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheUnassociatedFiles {
+		t.Errorf("expected tool %q, got %q", ToolAmcacheUnassociatedFiles, res.Tool)
+	}
+}
+
+// --- AmcacheParser ProgramEntries tests ---
+
+func TestDetectAmcacheProgramEntries(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "amcache-testing_ProgramEntries.csv")
+	content := "Name,ProgramId,Publisher,Version,Language,InstallDate," +
+		"InstallDateArpLastModified,InstallDateMsi,InstallDateFromLinkFile,KeyLastWriteTimestamp\n" +
+		"TestApp,{abc123},Acme,1.0,1033,2026-01-10 00:00:00," +
+		"2026-01-11 00:00:00,2026-01-12 00:00:00,2026-01-09 00:00:00,2026-01-15 00:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolAmcacheProgramEntries {
+		t.Errorf("expected tool %q, got %q", ToolAmcacheProgramEntries, tool)
+	}
+}
+
+func TestAmcacheProgramEntriesRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "amcache-testing_ProgramEntries.csv")
+	content := "Name,ProgramId,Publisher,Version,Language,InstallDate," +
+		"InstallDateArpLastModified,InstallDateMsi,InstallDateFromLinkFile,KeyLastWriteTimestamp\n" +
+		"TestApp,{abc123},Acme,1.0,1033,2026-01-10 00:00:00," +
+		"2026-01-11 00:00:00,2026-01-12 00:00:00,2026-01-09 00:00:00,2026-01-15 00:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolAmcacheProgramEntries {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolAmcacheProgramEntries)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events, got 0")
+	}
+	// The single row has 5 non-empty timestamp columns — expect 5 events.
+	if res.Count != 5 {
+		t.Errorf("expected 5 events (one per timestamp column), got %d", res.Count)
+	}
+	e := res.Events[0]
+	if e.Source != "AMCACHE" {
+		t.Errorf("source = %q, want AMCACHE", e.Source)
+	}
+	if e.SourceType != "Amcache ProgramEntries" {
+		t.Errorf("sourcetype = %q, want Amcache ProgramEntries", e.SourceType)
+	}
+	if e.Format != "eztool_amcacheparser" {
+		t.Errorf("format = %q, want eztool_amcacheparser", e.Format)
+	}
+	if e.Desc != "TestApp" {
+		t.Errorf("desc = %q, want TestApp", e.Desc)
+	}
+	// Verify all 5 timestamp types appear.
+	types := make(map[string]bool)
+	for _, ev := range res.Events {
+		types[ev.Type] = true
+	}
+	for _, want := range []string{
+		"KeyLastWriteTimestamp", "InstallDate",
+		"InstallDateArpLastModified", "InstallDateMsi", "InstallDateFromLinkFile",
+	} {
+		if !types[want] {
+			t.Errorf("expected event type %q to be present", want)
+		}
+	}
+}
+
+// --- MFTECmd $J tests ---
+
+func TestDetectMFTECmdJ(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MFTECmd_$J_Output.csv")
+	content := "EntryNumber,SequenceNumber,Name,ParentEntryNumber,ParentSequenceNumber," +
+		"ParentPath,UpdateTimestamp,UpdateReasons,UpdateSequenceNumber\n" +
+		"39,1,$MFT,5,5,.,2026-03-01 10:00:00,DataExtend,123456789\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolMFTECmdJ {
+		t.Errorf("expected tool %q, got %q", ToolMFTECmdJ, tool)
+	}
+}
+
+func TestMFTECmdJRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "MFTECmd_$J_Output.csv")
+	content := "EntryNumber,SequenceNumber,Name,ParentEntryNumber,ParentSequenceNumber," +
+		"ParentPath,UpdateTimestamp,UpdateReasons,UpdateSequenceNumber\n" +
+		"39,1,important.docx,5,5,\\Users\\test,2026-03-01 10:00:00,DataExtend,123456789\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolMFTECmdJ {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolMFTECmdJ)
+	}
+	if res.Count != 1 {
+		t.Fatalf("expected 1 event, got %d", res.Count)
+	}
+	e := res.Events[0]
+	if e.Source != "FILESYSTEM" {
+		t.Errorf("source = %q, want FILESYSTEM", e.Source)
+	}
+	if e.SourceType != "MFT Journal" {
+		t.Errorf("sourcetype = %q, want MFT Journal", e.SourceType)
+	}
+	if e.Format != "eztool_mftecmd" {
+		t.Errorf("format = %q, want eztool_mftecmd", e.Format)
+	}
+	if e.Desc != "important.docx" {
+		t.Errorf("desc = %q, want important.docx", e.Desc)
+	}
+	if e.Type != "UpdateTimestamp" {
+		t.Errorf("type = %q, want UpdateTimestamp", e.Type)
+	}
+	if e.Datetime != "2026-03-01 10:00:00" {
+		t.Errorf("datetime = %q, want 2026-03-01 10:00:00", e.Datetime)
+	}
+	if !strings.Contains(e.Extra, "UpdateReasons") {
+		t.Errorf("extra = %q, expected UpdateReasons", e.Extra)
+	}
+}
+
+// --- Source normalization ---
+
+func TestSourceNormalizationUppercase(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "RBCmd_Output.csv")
+	content := "SourceName,FileType,FileName,FileSize,DeletedOn\n" +
+		"$IABCD1234.docx,$I,ImportantDoc.docx,45678,2022-12-25 23:06:03\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Count == 0 {
+		t.Fatal("expected events")
+	}
+	for _, e := range res.Events {
+		if e.Source != strings.ToUpper(e.Source) {
+			t.Errorf("Source %q is not uppercase", e.Source)
+		}
+	}
+}
+
+// --- WxTCmd tests ---
+
+func TestDetectWxTCmdActivity(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "WxTCmd_Activity.csv")
+	content := "ActivityTypeOrg,ActivityType,Executable,DisplayText,StartTime,EndTime," +
+		"LastModifiedTime,LastModifiedOnClient,OriginalLastModifiedOnClient," +
+		"DevicePlatform,TimeZone,Duration,IsLocalOnly,CreatedInCloud,ETag,ExpirationTime\n" +
+		"Microsoft.Windows.Photos,InFocus,C:\\Windows\\Photos.exe,Photos," +
+		"2026-01-10 09:00:00,2026-01-10 09:15:00," +
+		"2026-01-10 09:15:00,2026-01-10 09:15:00,2026-01-10 09:00:00," +
+		"Windows.Desktop,UTC,900,0,0,abc123def,2026-03-10 09:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolWxTCmdActivity {
+		t.Errorf("expected tool %q, got %q", ToolWxTCmdActivity, tool)
+	}
+}
+
+func TestWxTCmdActivityRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "WxTCmd_Activity.csv")
+	content := "ActivityTypeOrg,ActivityType,Executable,DisplayText,StartTime,EndTime," +
+		"LastModifiedTime,LastModifiedOnClient,OriginalLastModifiedOnClient," +
+		"DevicePlatform,TimeZone,Duration,IsLocalOnly,CreatedInCloud,ETag,ExpirationTime\n" +
+		"Microsoft.Windows.Photos,InFocus,C:\\Windows\\Photos.exe,Photos," +
+		"2026-01-10 09:00:00,2026-01-10 09:15:00," +
+		",,," +
+		"Windows.Desktop,UTC,900,0,0,abc123def,2026-03-10 09:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Tool != ToolWxTCmdActivity {
+		t.Errorf("tool = %q, want %q", res.Tool, ToolWxTCmdActivity)
+	}
+	if res.Count < 2 {
+		t.Fatalf("expected at least 2 events (StartTime + EndTime), got %d", res.Count)
+	}
+	e := res.Events[0]
+	if e.Source != "WINDOWSTIMELINE" {
+		t.Errorf("source = %q, want WINDOWSTIMELINE", e.Source)
+	}
+	if e.SourceType != "Windows 10 Timeline" {
+		t.Errorf("sourcetype = %q, want Windows 10 Timeline", e.SourceType)
+	}
+	if e.Desc != "Photos" {
+		t.Errorf("desc = %q, want Photos", e.Desc)
+	}
+	types := make(map[string]bool)
+	for _, ev := range res.Events {
+		types[ev.Type] = true
+	}
+	for _, want := range []string{"StartTime", "EndTime"} {
+		if !types[want] {
+			t.Errorf("expected event type %q to be present", want)
+		}
+	}
+	// Verify MACB values
+	for _, ev := range res.Events {
+		switch ev.Type {
+		case "StartTime", "EndTime":
+			if ev.MACB != "M..." {
+				t.Errorf("MACB for %q = %q, want M...", ev.Type, ev.MACB)
+			}
+		case "LastModifiedTime", "LastModifiedOnClient", "OriginalLastModifiedOnClient":
+			if ev.MACB != ".AB." {
+				t.Errorf("MACB for %q = %q, want .AB.", ev.Type, ev.MACB)
+			}
+		}
+	}
+}
+
+func TestWxTCmdActivityEmptyTimestampsSkipped(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "WxTCmd_Activity.csv")
+	content := "ActivityTypeOrg,ActivityType,Executable,DisplayText,StartTime,EndTime," +
+		"LastModifiedTime,LastModifiedOnClient,OriginalLastModifiedOnClient," +
+		"DevicePlatform,TimeZone,Duration,IsLocalOnly,CreatedInCloud,ETag,ExpirationTime\n" +
+		"Microsoft.Windows.Photos,InFocus,C:\\Windows\\Photos.exe,Photos," +
+		"2026-01-10 09:00:00,,,,,Windows.Desktop,UTC,900,0,0,abc123def,2026-03-10 09:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	res, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents failed: %v", err)
+	}
+	if res.Count != 1 {
+		t.Errorf("expected exactly 1 event (only StartTime populated), got %d", res.Count)
+	}
+	if res.Events[0].Type != "StartTime" {
+		t.Errorf("type = %q, want StartTime", res.Events[0].Type)
+	}
+}
+
+func TestDetectWxTCmdPackageIDs(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "WxTCmd_PackageIDs.csv")
+	content := "PackageId,Platform,AdditionalInformation,Expires\n" +
+		"com.microsoft.photos,Windows.Desktop,,2026-06-01 00:00:00\n"
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	tool, err := DetectTool(path)
+	if err != nil {
+		t.Fatalf("DetectTool failed: %v", err)
+	}
+	if tool != ToolWxTCmdPackageIDs {
+		t.Errorf("expected tool %q, got %q", ToolWxTCmdPackageIDs, tool)
+	}
+}
+
+func TestWxTCmdPackageIDsInNoTimestampFormats(t *testing.T) {
+	if _, ok := NoTimestampFormats[ToolWxTCmdPackageIDs]; !ok {
+		t.Errorf("NoTimestampFormats missing %q", ToolWxTCmdPackageIDs)
+	}
+}
+
+func TestImportFolderRecursiveWxTCmdPackageIDsSkipped(t *testing.T) {
+	root := t.TempDir()
+	content := "PackageId,Platform,AdditionalInformation,Expires\n" +
+		"com.microsoft.photos,Windows.Desktop,,2026-06-01 00:00:00\n"
+	if err := os.WriteFile(filepath.Join(root, "WxTCmd_PackageIDs_Output.csv"),
+		[]byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	store := &mockStore{}
+	summary, err := ImportFolderRecursive(root, store, nil)
+	if err != nil {
+		t.Fatalf("ImportFolderRecursive: %v", err)
+	}
+	if summary.TotalFilesProcessed != 0 {
+		t.Errorf("TotalFilesProcessed = %d, want 0 (PackageIDs should not count)", summary.TotalFilesProcessed)
+	}
+	if store.insertedCount != 0 {
+		t.Errorf("insertedCount = %d, want 0", store.insertedCount)
+	}
+	var found bool
+	for _, sf := range summary.SkippedFiles {
+		if sf.RelativePath == "WxTCmd_PackageIDs_Output.csv" &&
+			strings.Contains(sf.Reason, "no timestamp columns") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected PackageIDs file in SkippedFiles with 'no timestamp columns'; got: %v",
+			summary.SkippedFiles)
 	}
 }

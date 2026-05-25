@@ -24,7 +24,6 @@ build/bin/
 frontend/dist/
 frontend/node_modules/
 
-
 # Go
 *.exe
 *.exe~
@@ -44,6 +43,7 @@ CLAUDE.md
 MEMORY/
 WORK/
 nimbalyst/
+TODO.md
 
 # Document folders
 Plans/

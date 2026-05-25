@@ -22,7 +22,7 @@ Supported import formats:
 - TLN: 5-field pipe-delimited timeline format
 - L2TTLN: 7-field pipe-delimited extended timeline format
 - Dynamic CSV: Plaso default output with variable columns defined by header row
-- EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd). Auto-detected when importing single files; use Import Folder (Recursive) for batch import.
+- EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, SBECmd, MFTECmd, AmcacheParser, SrumECmd, RBCmd, WxTCmd, AppCompatCacheParser; 28 subtypes). Auto-detected when importing single files; use Import Folder (Recursive) for batch import.
 
 After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
@@ -281,7 +281,26 @@ Persistence: Check "Resume logging on next launch" to have logging automatically
     title: 'EZ Tools Import',
     content: `EZ Tools are Eric Zimmerman's forensic artifact parsers for Windows evidence. 4n6time can import their CSV output directly, auto-detecting the tool and expanding multiple timestamp columns into individual timeline events.
 
-Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive), SrumECmd (SRUM database), MFTECmd (NTFS MFT), and SBECmd (ShellBags); 19 subtypes total.
+Supported tools (produce timeline events):
+- EvtxECmd: Windows Event Logs
+- PECmd: Prefetch files
+- LECmd: LNK shortcut files
+- JLECmd: Jump Lists (Automatic and Custom destinations)
+- SBECmd: ShellBags
+- MFTECmd: $MFT (NTFS file table) and $J (USN journal)
+- AmcacheParser: AssociatedFileEntries, UnassociatedFileEntries, ProgramEntries, DeviceContainers, DevicePnps, DriveBinaries, DriverPackages, ShortCuts
+- SrumECmd: AppResourceUseInfo, AppTimeline, EnergyUsage, NetworkConnections, NetworkUsages, PushNotifications, vfuprov
+- RBCmd: Recycle Bin ($I/$R records)
+- WxTCmd: Activity output (Windows 10 Timeline)
+- AppCompatCacheParser: ShimCache
+
+Recognized but skipped (no timeline events):
+- MFTECmd $Boot and $SDS: volume metadata and security descriptor data; contain no timestamp columns and are explicitly skipped rather than flagged as unknown formats.
+- WxTCmd PackageIDs: reference/lookup table with no forensic timestamp data; explicitly skipped.
+
+These skipped files appear in the recursive import summary dialog with the reason "no timestamp columns" so you know they were recognized and intentionally skipped, not failed.
+
+28 subtypes total.
 
 Single file import: Use the normal Import Timeline button (or File > Import Timeline). EZ Tool CSVs are auto-detected from their column headers. No special steps are needed.
 
@@ -289,9 +308,9 @@ Recursive folder import: Use the Import Folder (Recursive) button on the welcome
 
 Multi-timestamp expansion: Each row in an EZ Tool CSV may contain multiple timestamp columns (e.g., Created, Modified, Accessed). Each non-empty timestamp becomes a separate timeline event. This gives you a complete picture of all temporal activity associated with each artifact.
 
-Source identification: The source column identifies which tool produced the data. Values include EVTX (event logs), PF (prefetch), LNK (shortcuts), JUMPLIST (jump lists), AMCACHE (amcache), SRUM (system resource usage), MFT (file system), and SHELLBAGS (shell bags).
+Source identification: The source column identifies which tool produced the data. All source values are stored in uppercase. Values include EVTX (event logs), PF (prefetch), LNK (shortcuts), JUMPLIST (jump lists), AMCACHE (amcache), SRUM (system resource usage), FILESYSTEM (MFT, journal, recycle bin), SHELLBAGS (shell bags), WINDOWSTIMELINE (WxTCmd activity), and REGISTRY (ShimCache).
 
-Type column: The type column shows which timestamp field each event represents. Examples: TimeCreated, LastRun, Created0x10, TargetModified, FirstInteracted. This tells you exactly what activity the timestamp records.
+Type column: The type column shows which timestamp field each event represents. Examples: TimeCreated, LastRun, Created0x10, TargetModified, FirstInteracted, StartTime, DeletedOn. This tells you exactly what activity the timestamp records.
 
 Database compatibility: EZ Tool imports work with both SQLite and PostgreSQL databases. You can import EZ Tool data into an existing database to combine it with other evidence sources like Plaso timelines, creating a unified investigation timeline.`
   },

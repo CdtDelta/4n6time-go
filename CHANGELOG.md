@@ -2,6 +2,31 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.14.0 (2026-05-24)
+
+### New parsers
+
+- **WxTCmd** (Windows 10 Timeline): Activity output with multi-timestamp expansion (StartTime, EndTime, LastModifiedTime, LastModifiedOnClient, OriginalLastModifiedOnClient). PackageIDs output is recognized and skipped with an explanatory message (reference data, no timeline events).
+- **RBCmd** (Recycle Bin): $I/$R records with DeletedOn timestamp.
+- **AppCompatCacheParser** (ShimCache): LastModifiedTimeUTC timestamp; rows with empty or NA timestamps skipped silently.
+- **SrumECmd AppResourceUseInfo**: seventh SrumECmd subtype, following the same base mapping pattern as existing SRUM types.
+- **AmcacheParser DeviceContainers**: KeyLastWriteTimestamp.
+- **AmcacheParser DevicePnps**: KeyLastWriteTimestamp and DriverVerDate (multi-expand).
+- **AmcacheParser DriveBinaries**: KeyLastWriteTimestamp, DriverTimeStamp, and DriverLastWriteTime (multi-expand).
+- **AmcacheParser DriverPackages**: KeyLastWriteTimestamp and Date (multi-expand).
+- **AmcacheParser ShortCuts**: KeyLastWriteTimestamp.
+
+### Restored parsers (regression fix)
+
+- **AmcacheParser AssociatedFileEntries**: accidentally dropped in a prior pass; restored with filename-based detection to distinguish from UnassociatedFileEntries.
+- **AmcacheParser ProgramEntries**: accidentally dropped; restored with up to five timestamp expansions (KeyLastWriteTimestamp, InstallDate, InstallDateArpLastModified, InstallDateMsi, InstallDateFromLinkFile).
+- **MFTECmd $MFT** and **MFTECmd $J**: collapsed into a single constant in a prior pass, causing zero events to be imported; restored as separate constants with correct timestamp columns.
+
+### Improvements
+
+- **No-timestamp format recognition**: MFTECmd $Boot and MFTECmd $SDS are now recognized during recursive import and reported in the skipped-files list with the reason "no timestamp columns: no timeline data to import" rather than appearing as unknown formats. This mechanism is general and will apply to any future recognized-but-untimed formats.
+- **Source field normalization**: all imported events now have their Source field stored in uppercase regardless of how individual parsers set it (AMCACHE, FILESYSTEM, REGISTRY, WINDOWSTIMELINE, SRUM, etc.).
+
 ## [0.13.0] - 2026-05-14
 
 ### Features

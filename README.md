@@ -9,7 +9,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 ## Features
 
 - Import L2T CSV, Plaso JSONL, TLN, L2TTLN, dynamic CSV, and **EZ Tools CSV** files (tested with 2GB+ files, millions of events)
-- **EZ Tools CSV import**: auto-detect and import output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, AmcacheParser, SrumECmd, MFTECmd, SBECmd) with multi-timestamp expansion
+- **EZ Tools CSV import**: auto-detect and import output from Eric Zimmerman's tools with multi-timestamp expansion (EvtxECmd, PECmd, LECmd, JLECmd, SBECmd, MFTECmd, AmcacheParser, SrumECmd, RBCmd, WxTCmd, AppCompatCacheParser; 28 subtypes total)
 - **Import EZ Tools Folder**: batch import all CSVs from a tool output directory
 - **Tab system**: right-click any event to open a filtered view in a new tab; each tab has independent filters, search, and pagination; tab sessions persist per-database and are restored on next open
 - **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
@@ -152,7 +152,7 @@ When a SQLite or PostgreSQL database is already open, importing a timeline file 
 
 **Directory:** Use the **Import EZ Tools Folder** button on the welcome screen or File > Import EZ Tools Folder to batch import all CSV files from a tool output directory.
 
-Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists), AmcacheParser (Amcache hive, 6 sub-types), SrumECmd (SRUM database, 6 sub-types), MFTECmd (NTFS MFT), SBECmd (ShellBags).
+Supported tools: **EvtxECmd** (Windows Event Logs), **PECmd** (Prefetch), **LECmd** (LNK files), **JLECmd** (Jump Lists), **SBECmd** (ShellBags), **MFTECmd** ($MFT, $J; $Boot and $SDS recognized but skipped), **AmcacheParser** (AssociatedFileEntries, UnassociatedFileEntries, ProgramEntries, DeviceContainers, DevicePnps, DriveBinaries, DriverPackages, ShortCuts), **SrumECmd** (AppResourceUseInfo, AppTimeline, EnergyUsage, NetworkConnections, NetworkUsages, PushNotifications, vfuprov), **RBCmd** (Recycle Bin), **WxTCmd** (Activity; PackageIDs recognized but skipped), **AppCompatCacheParser** (ShimCache).
 
 ### PostgreSQL Support
 
