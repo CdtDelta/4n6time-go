@@ -2,6 +2,12 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.14.1 (2026-06-15)
+
+### Security
+
+- PostgreSQL connection string no longer exposes the password in the UI header or log file. `PostgresStore.Path()` now returns a sanitized string with the password omitted (e.g., `postgres://user@host:port/dbname?sslmode=MODE`).
+
 ## v0.14.0 (2026-05-24)
 
 ### New parsers

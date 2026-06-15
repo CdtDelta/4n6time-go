@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -102,9 +103,24 @@ func (db *PostgresStore) Close() error {
 	return nil
 }
 
-// Path returns the connection string used to connect to the database.
+// Path returns a sanitized connection string with the password removed,
+// suitable for display in the UI.
 func (db *PostgresStore) Path() string {
-	return db.connStr
+	u, err := url.Parse(db.connStr)
+	if err != nil {
+		// Fallback: replace everything between the last colon before @ and the @
+		// with **** so the password is not exposed.
+		if idx := strings.LastIndex(db.connStr, "@"); idx != -1 {
+			credEnd := idx
+			credStart := strings.LastIndex(db.connStr[:credEnd], ":")
+			if credStart != -1 {
+				return db.connStr[:credStart+1] + "****" + db.connStr[credEnd:]
+			}
+		}
+		return db.connStr
+	}
+	u.User = url.User(u.User.Username())
+	return u.String()
 }
 
 // Conn returns the underlying *sql.DB connection for advanced query usage.
