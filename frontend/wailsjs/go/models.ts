@@ -17,7 +17,7 @@ export namespace database {
 
 }
 
-export namespace eztoolparser {
+export namespace importer {
 	
 	export class SkippedFile {
 	    relativePath: string;

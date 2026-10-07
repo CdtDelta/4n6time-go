@@ -1397,36 +1397,3 @@ func TestWxTCmdPackageIDsInNoTimestampFormats(t *testing.T) {
 		t.Errorf("NoTimestampFormats missing %q", ToolWxTCmdPackageIDs)
 	}
 }
-
-func TestImportFolderRecursiveWxTCmdPackageIDsSkipped(t *testing.T) {
-	root := t.TempDir()
-	content := "PackageId,Platform,AdditionalInformation,Expires\n" +
-		"com.microsoft.photos,Windows.Desktop,,2026-06-01 00:00:00\n"
-	if err := os.WriteFile(filepath.Join(root, "WxTCmd_PackageIDs_Output.csv"),
-		[]byte(content), 0644); err != nil {
-		t.Fatalf("writing test file: %v", err)
-	}
-	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
-	if err != nil {
-		t.Fatalf("ImportFolderRecursive: %v", err)
-	}
-	if summary.TotalFilesProcessed != 0 {
-		t.Errorf("TotalFilesProcessed = %d, want 0 (PackageIDs should not count)", summary.TotalFilesProcessed)
-	}
-	if store.insertedCount != 0 {
-		t.Errorf("insertedCount = %d, want 0", store.insertedCount)
-	}
-	var found bool
-	for _, sf := range summary.SkippedFiles {
-		if sf.RelativePath == "WxTCmd_PackageIDs_Output.csv" &&
-			strings.Contains(sf.Reason, "no timestamp columns") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected PackageIDs file in SkippedFiles with 'no timestamp columns'; got: %v",
-			summary.SkippedFiles)
-	}
-}

@@ -14,12 +14,9 @@ import (
 
 	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
-	"github.com/cdtdelta/4n6time/internal/dynamicparser"
-	"github.com/cdtdelta/4n6time/internal/eztoolparser"
-	"github.com/cdtdelta/4n6time/internal/jsonlparser"
+	"github.com/cdtdelta/4n6time/internal/importer"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/query"
-	"github.com/cdtdelta/4n6time/internal/tlnparser"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -232,37 +229,12 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		return nil, nil
 	}
 
-	ext := strings.ToLower(filepath.Ext(csvPath))
-	isJSONL := ext == ".jsonl" || ext == ".json"
-
-	// Detect format: JSONL, TLN/L2TTLN, dynamic CSV, or L2T CSV
-	// Try validation in order of specificity
-	formatName := ""
-	if isJSONL {
-		if err := jsonlparser.ValidateFile(csvPath); err != nil {
-			return nil, fmt.Errorf("invalid JSONL file: %w", err)
-		}
-		formatName = "JSONL"
-	} else if ext == ".tln" || ext == ".l2ttln" {
-		if err := tlnparser.ValidateFile(csvPath); err != nil {
-			return nil, fmt.Errorf("invalid TLN file: %w", err)
-		}
-		formatName = "TLN"
-	} else {
-		// Try formats in order of specificity
-		if tlnErr := tlnparser.ValidateFile(csvPath); tlnErr == nil {
-			// Could be TLN with .txt or .csv extension
-			formatName = "TLN"
-		} else if ezErr := eztoolparser.ValidateFile(csvPath); ezErr == nil {
-			formatName = "EZ Tools CSV"
-		} else if err := csvparser.ValidateHeader(csvPath); err == nil {
-			formatName = "CSV"
-		} else if dynErr := dynamicparser.ValidateFile(csvPath); dynErr == nil {
-			formatName = "Dynamic CSV"
-		} else {
-			return nil, fmt.Errorf("unrecognized file format: not a valid L2T CSV, JSONL, TLN, EZ Tools CSV, or dynamic CSV file")
-		}
+	// The registry defines detection order; the first matching format wins.
+	format, _, err := importer.DetectFile(csvPath)
+	if err != nil {
+		return nil, err
 	}
+	formatName := format.Name
 
 	importStart := time.Now()
 	a.logInfo("Import started: " + formatName + " from " + csvPath)
@@ -302,17 +274,31 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		store = a.store
 	}
 
-	// Read the file
-	var events []*model.Event
-
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 		"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
 	})
 
-	progressCallback := func(count int) {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
-		})
+	progress := &importer.Progress{
+		Reading: func(count int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
+			})
+		},
+		Status: func(message string, count int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "reading", "message": message, "count": count, "total": 0,
+			})
+		},
+		InsertStart: func(total int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
+			})
+		},
+		Inserting: func(count, total int) {
+			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+				"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
+			})
+		},
 	}
 
 	// closeOnError closes the store only if we created a new one (not for existing databases)
@@ -322,68 +308,11 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		}
 	}
 
-	switch formatName {
-	case "JSONL":
-		result, err := jsonlparser.ReadEvents(csvPath, progressCallback)
-		if err != nil {
-			closeOnError()
-			return nil, fmt.Errorf("reading JSONL: %w", err)
-		}
-		events = result.Events
-
-	case "TLN":
-		result, err := tlnparser.ReadEvents(csvPath, progressCallback)
-		if err != nil {
-			closeOnError()
-			return nil, fmt.Errorf("reading TLN: %w", err)
-		}
-		events = result.Events
-
-	case "EZ Tools CSV":
-		result, err := eztoolparser.ReadEvents(csvPath, progressCallback)
-		if err != nil {
-			closeOnError()
-			return nil, fmt.Errorf("reading EZ Tools CSV: %w", err)
-		}
-		events = result.Events
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "reading", "message": fmt.Sprintf("Importing %s data...", result.Tool), "count": result.Count, "total": 0,
-		})
-
-	case "Dynamic CSV":
-		result, err := dynamicparser.ReadEvents(csvPath, progressCallback)
-		if err != nil {
-			closeOnError()
-			return nil, fmt.Errorf("reading dynamic CSV: %w", err)
-		}
-		events = result.Events
-
-	case "CSV":
-		result, err := csvparser.ReadEvents(csvPath, "", "", 0, progressCallback)
-		if err != nil {
-			closeOnError()
-			return nil, fmt.Errorf("reading CSV: %w", err)
-		}
-		events = result.Events
-
-	default:
-		closeOnError()
-		return nil, fmt.Errorf("unknown format: %s", formatName)
-	}
-
-	// Insert into database
-	total := len(events)
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-		"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
-	})
-	_, err = store.InsertEvents(events, func(count int) {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
-			"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
-		})
-	})
+	// Import wraps its errors with "reading <format>:" or "inserting events:".
+	total, err := format.Import(csvPath, store, progress)
 	if err != nil {
 		closeOnError()
-		return nil, fmt.Errorf("inserting events: %w", err)
+		return nil, err
 	}
 
 	// Update metadata tables
@@ -411,7 +340,7 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 // ImportFolderRecursive opens a directory chooser, then walks the selected
 // folder up to 3 levels deep importing all recognized EZ Tool CSV files.
 // If no database is open, prompts for a new SQLite file first.
-func (a *App) ImportFolderRecursive() (*eztoolparser.ImportSummary, error) {
+func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
 	dirPath, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Select Folder to Import",
 	})
@@ -475,7 +404,7 @@ func (a *App) ImportFolderRecursive() (*eztoolparser.ImportSummary, error) {
 		})
 	}
 
-	summary, err := eztoolparser.ImportFolderRecursive(dirPath, store, progressCallback)
+	summary, err := importer.ImportFolderRecursive(dirPath, store, progressCallback)
 	if err != nil {
 		closeOnError()
 		return nil, fmt.Errorf("recursive folder import: %w", err)
@@ -1152,6 +1081,9 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	alwaysParts = append(alwaysParts, "datetime > '1970-01-01' AND datetime < '2100-01-01'")
 
 	for _, f := range req.Filters {
+		if !isValidModelField(f.Field) {
+			continue
+		}
 		switch f.Operator {
 		case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
 			val := f.Value
@@ -1197,7 +1129,7 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	}
 
 	// Tab base query: always ANDed regardless of the user's AND/OR logic setting
-	if req.BaseField != "" {
+	if req.BaseField != "" && isValidModelField(req.BaseField) {
 		baseOp := "="
 		if req.BaseOp == "LIKE" {
 			baseOp = "LIKE"

@@ -1,6 +1,7 @@
-package eztoolparser
+package importer
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 	"github.com/cdtdelta/4n6time/internal/database"
 )
 
-// Skip reason constants for unrecognized or unprocessable CSV files.
+// Skip reason constants for unrecognized or unprocessable files.
 const (
 	SkipReasonUnrecognizedFormat = "unrecognized format"
 	SkipReasonEmptyFile          = "empty file"
@@ -38,14 +39,49 @@ type ImportSummary struct {
 	MaxDepthReached     int                  `json:"maxDepthReached"`
 }
 
+// recursiveFormats returns the registry entries recursive import may use,
+// in registry order.
+func recursiveFormats() []*Format {
+	var out []*Format
+	for i := range Registry {
+		if Registry[i].Recursive {
+			out = append(out, &Registry[i])
+		}
+	}
+	return out
+}
+
+// recursiveExtensions returns the set of file extensions recursive import
+// considers, derived from the recursive registry entries.
+func recursiveExtensions(formats []*Format) map[string]struct{} {
+	exts := make(map[string]struct{})
+	for _, f := range formats {
+		for _, e := range f.Extensions {
+			exts[e] = struct{}{}
+		}
+	}
+	return exts
+}
+
 // ImportFolderRecursive walks root up to 3 directory levels deep (root = depth 0),
-// detects and imports all recognized EZ Tool CSV files, and returns a summary.
-// Symlinks are skipped without error. Non-.csv files are silently ignored.
+// detects and imports all files recognized by a Recursive registry entry, and
+// returns a summary. Symlinks are skipped without error. Files whose extension
+// no recursive entry claims are silently ignored.
 // onProgress is called after each successfully imported file with the relative
 // path and the number of events inserted; it may be nil.
 func ImportFolderRecursive(root string, store database.Store, onProgress func(relPath string, eventsInserted int)) (*ImportSummary, error) {
 	summary := &ImportSummary{
 		PerTool: make(map[string]ToolStats),
+	}
+
+	formats := recursiveFormats()
+	allowedExts := recursiveExtensions(formats)
+
+	skip := func(rel, reason string) {
+		summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
+			RelativePath: rel,
+			Reason:       reason,
+		})
 	}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
@@ -77,81 +113,43 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 			return nil
 		}
 
-		// Filter to .csv files only (case-insensitive).
-		if strings.ToLower(filepath.Ext(path)) != ".csv" {
+		// Filter to extensions claimed by recursive formats (case-insensitive).
+		ext := strings.ToLower(filepath.Ext(path))
+		if _, ok := allowedExts[ext]; !ok {
 			return nil
 		}
 
 		// Empty files produce no useful data.
 		info, err := d.Info()
 		if err != nil || info.Size() == 0 {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       SkipReasonEmptyFile,
-			})
+			skip(rel, SkipReasonEmptyFile)
 			return nil
 		}
 
-		toolName, detectErr := DetectTool(path)
-		if detectErr != nil {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       SkipReasonParseError + detectErr.Error(),
-			})
-			return nil
-		}
-		if toolName == "" {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       SkipReasonUnrecognizedFormat,
-			})
-			return nil
-		}
-		if _, isNoTimestamp := NoTimestampFormats[toolName]; isNoTimestamp {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       fmt.Sprintf("no timestamp columns (recognized as %s): no timeline data to import", toolName),
-			})
-			return nil
-		}
-
-		result, parseErr := ReadEvents(path, nil)
-		if parseErr != nil {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       SkipReasonParseError + parseErr.Error(),
-			})
-			return nil
-		}
-
-		// A recognized file may expand to zero events (all timestamps empty).
-		if len(result.Events) == 0 {
-			stats := summary.PerTool[result.Tool]
-			stats.FileCount++
-			summary.PerTool[result.Tool] = stats
-			summary.TotalFilesProcessed++
-			if depth > summary.MaxDepthReached {
-				summary.MaxDepthReached = depth
-			}
-			if onProgress != nil {
-				onProgress(rel, 0)
+		format, label, detectErr := detectRecursive(formats, path, ext)
+		if format == nil {
+			if detectErr != nil {
+				skip(rel, SkipReasonParseError+detectErr.Error())
+			} else {
+				skip(rel, SkipReasonUnrecognizedFormat)
 			}
 			return nil
 		}
-
-		inserted, insertErr := store.InsertEvents(result.Events, nil)
-		if insertErr != nil {
-			summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
-				RelativePath: rel,
-				Reason:       fmt.Sprintf("%s%s", SkipReasonParseError, insertErr.Error()),
-			})
+		if format.HasTimeline != nil && !format.HasTimeline(label) {
+			skip(rel, fmt.Sprintf("no timestamp columns (recognized as %s): no timeline data to import", label))
 			return nil
 		}
 
-		stats := summary.PerTool[result.Tool]
+		inserted, importErr := format.Import(path, store, nil)
+		if importErr != nil {
+			skip(rel, SkipReasonParseError+innerError(importErr).Error())
+			return nil
+		}
+
+		stats := summary.PerTool[label]
 		stats.FileCount++
 		stats.EventCount += inserted
-		summary.PerTool[result.Tool] = stats
+		summary.PerTool[label] = stats
 
 		summary.TotalEvents += inserted
 		summary.TotalFilesProcessed++
@@ -173,6 +171,36 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 	return summary, nil
 }
 
+// detectRecursive tries each recursive format that claims ext, in registry
+// order. It returns the first match, or nil with the first detection error
+// seen (nil if every format simply declined the file).
+func detectRecursive(formats []*Format, path, ext string) (*Format, string, error) {
+	var firstErr error
+	for _, f := range formats {
+		if !f.hasExtension(ext) {
+			continue
+		}
+		label, ok, err := f.Detect(path)
+		if ok {
+			return f, label, nil
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, "", firstErr
+}
+
+// innerError strips the single "reading X:" or "inserting events:" wrapper
+// that Format.Import adds, so skip reasons show the underlying parser or
+// store error exactly as they did before the registry existed.
+func innerError(err error) error {
+	if inner := errors.Unwrap(err); inner != nil {
+		return inner
+	}
+	return err
+}
+
 // depthOf returns the depth of a path relative to the walk root.
 // The root itself ("." from filepath.Rel) returns 0.
 // Direct children return 1, grandchildren return 2, and so on.
@@ -182,4 +210,3 @@ func depthOf(rel string) int {
 	}
 	return strings.Count(rel, string(filepath.Separator)) + 1
 }
-

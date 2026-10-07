@@ -1,4 +1,4 @@
-package eztoolparser
+package importer
 
 import (
 	"os"
@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/cdtdelta/4n6time/internal/database"
+	"github.com/cdtdelta/4n6time/internal/eztoolparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 )
 
@@ -230,7 +231,7 @@ func TestImportFolderRecursiveMixedTree(t *testing.T) {
 	}
 
 	// PerTool map should have LECmd entry.
-	if stats, ok := summary.PerTool[ToolLECmd]; !ok {
+	if stats, ok := summary.PerTool[eztoolparser.ToolLECmd]; !ok {
 		t.Error("PerTool missing LECmd entry")
 	} else if stats.FileCount != 2 {
 		t.Errorf("LECmd FileCount = %d, want 2", stats.FileCount)
@@ -278,7 +279,7 @@ func TestImportFolderRecursiveNoTimestampSkip(t *testing.T) {
 	}
 
 	// Must not appear under PerTool.
-	if _, ok := summary.PerTool[ToolMFTECmdBoot]; ok {
+	if _, ok := summary.PerTool[eztoolparser.ToolMFTECmdBoot]; ok {
 		t.Error("$Boot file must not appear in PerTool map")
 	}
 }
@@ -317,5 +318,38 @@ func TestImportFolderRecursiveSummaryCorrectness(t *testing.T) {
 	}
 	if summary.TotalEvents == 0 {
 		t.Error("TotalEvents = 0, expected > 0")
+	}
+}
+
+func TestImportFolderRecursiveWxTCmdPackageIDsSkipped(t *testing.T) {
+	root := t.TempDir()
+	content := "PackageId,Platform,AdditionalInformation,Expires\n" +
+		"com.microsoft.photos,Windows.Desktop,,2026-06-01 00:00:00\n"
+	if err := os.WriteFile(filepath.Join(root, "WxTCmd_PackageIDs_Output.csv"),
+		[]byte(content), 0644); err != nil {
+		t.Fatalf("writing test file: %v", err)
+	}
+	store := &mockStore{}
+	summary, err := ImportFolderRecursive(root, store, nil)
+	if err != nil {
+		t.Fatalf("ImportFolderRecursive: %v", err)
+	}
+	if summary.TotalFilesProcessed != 0 {
+		t.Errorf("TotalFilesProcessed = %d, want 0 (PackageIDs should not count)", summary.TotalFilesProcessed)
+	}
+	if store.insertedCount != 0 {
+		t.Errorf("insertedCount = %d, want 0", store.insertedCount)
+	}
+	var found bool
+	for _, sf := range summary.SkippedFiles {
+		if sf.RelativePath == "WxTCmd_PackageIDs_Output.csv" &&
+			strings.Contains(sf.Reason, "no timestamp columns") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected PackageIDs file in SkippedFiles with 'no timestamp columns'; got: %v",
+			summary.SkippedFiles)
 	}
 }
