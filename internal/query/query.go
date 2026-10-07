@@ -391,6 +391,52 @@ func (rq *RawQuery) SetRawWhere(where string) {
 	rq.rawWhere = where
 }
 
+// ValidateRawWhere checks a raw advanced-search WHERE clause for unquoted
+// semicolons. The advanced search feature is a documented exception to
+// parameterized queries: the caller supplies a raw SQL fragment that is
+// injected directly into the WHERE clause of a SELECT. On PostgreSQL this is
+// safe because pgx's extended query protocol rejects multi-statement
+// execution. On SQLite it is not: modernc.org/sqlite falls back to executing
+// semicolon-separated statements sequentially when it detects a
+// multi-statement script, so an unquoted semicolon could close the
+// surrounding SELECT and append arbitrary DDL/DML. A semicolon inside a
+// single-quoted string literal is not a statement terminator and is allowed.
+// A doubled single quote inside a literal is an escaped quote, per standard
+// SQL.
+//
+// SQL comments (-- and /*) outside a literal are rejected outright. The
+// validator only tracks single-quoted literals, so a quote inside a comment
+// would flip its in-quote state and hide a later semicolon (for example
+// "1=1 --'" followed by a newline and "; DROP TABLE ..."). Rejecting comments
+// is simpler and safer than parsing them, and a filter clause never needs one.
+func ValidateRawWhere(where string) error {
+	inQuote := false
+	runes := []rune(where)
+	for i := 0; i < len(runes); i++ {
+		switch runes[i] {
+		case '\'':
+			if inQuote && i+1 < len(runes) && runes[i+1] == '\'' {
+				i++ // escaped quote ('') inside a literal
+				continue
+			}
+			inQuote = !inQuote
+		case '-':
+			if !inQuote && i+1 < len(runes) && runes[i+1] == '-' {
+				return fmt.Errorf("comments are not permitted in advanced search clauses")
+			}
+		case '/':
+			if !inQuote && i+1 < len(runes) && runes[i+1] == '*' {
+				return fmt.Errorf("comments are not permitted in advanced search clauses")
+			}
+		case ';':
+			if !inQuote {
+				return fmt.Errorf("semicolons are not permitted in advanced search clauses")
+			}
+		}
+	}
+	return nil
+}
+
 // Build generates the SQL using the raw WHERE clause plus ordering and pagination.
 func (rq *RawQuery) Build() (string, []interface{}) {
 	idCol := rq.dialect.IDColumn()

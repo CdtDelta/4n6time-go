@@ -976,9 +976,33 @@ func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []inte
 }
 
 // shouldIncludeExaminerNotes inspects a SQL statement for a source filter.
-// If the WHERE clause filters on a specific source value that is not 'EXAMINER',
-// examiner notes should be excluded from the UNION. Returns true if no source
-// filter is present, source equals 'EXAMINER', or the filter cannot be determined.
+// If the WHERE clause filters on a specific source value that excludes
+// 'EXAMINER', examiner notes should be excluded from the UNION.
+//
+// This is a regex heuristic over the query text, not a real SQL parser. The
+// WHERE clause may originate from the advanced search feature's raw,
+// user-supplied clause (a documented exception to parameterized queries), so
+// it must not assume well-formed, simple input. Parameterized queries built
+// by the query package never produce a literal here (they always bind through
+// a placeholder), so the literal-matching regexes below only ever engage on
+// advanced search's raw SQL.
+//
+// Matched literal conditions are resolved in this priority order, and the
+// first rule that applies decides:
+//  1. any source = 'EXAMINER' includes notes
+//  2. else any source = '<other>' excludes notes
+//  3. else any source != / <> 'EXAMINER' excludes notes
+//  4. else any source != / <> '<other>' includes notes
+//  5. else any IN-list or LIKE comparison on source excludes notes
+//  6. else (no literal source filter) notes are included
+//
+// The order matters for clauses that combine conditions with AND: in
+// "source = 'FILE' AND source != 'REGISTRY'" the equality pins the result to
+// FILE, so notes must be excluded even though the != alone would admit them.
+// IN-lists and LIKE are ambiguous to this heuristic, so it fails closed: a
+// wrong exclusion just omits notes from one result set, while a wrong
+// inclusion could mix notes into an otherwise source-scoped result, which is
+// the worse outcome for an examiner relying on the filter.
 func shouldIncludeExaminerNotes(sqlStr string) bool {
 	// Parameterized queries signal note exclusion via a comment marker injected
 	// by app.go when the base query field is not one that examiner notes have.
@@ -986,28 +1010,42 @@ func shouldIncludeExaminerNotes(sqlStr string) bool {
 		return false
 	}
 
-	// Advanced search passes raw SQL with literal values. Look for source = 'VALUE'
-	// (case-insensitive) to detect source-filtered queries.
-	re := regexp.MustCompile(`(?i)\bsource\s*=\s*'([^']*)'`)
-	matches := re.FindAllStringSubmatch(sqlStr, -1)
-	if len(matches) > 0 {
-		// If any source filter matches 'EXAMINER', include notes
-		for _, m := range matches {
-			if strings.EqualFold(m[1], "EXAMINER") {
-				return true
-			}
+	// source = 'VALUE' / source != 'VALUE' / source <> 'VALUE'
+	re := regexp.MustCompile(`(?i)\bsource\s*(=|!=|<>)\s*'([^']*)'`)
+	var eqExaminer, eqOther, neExaminer, neOther bool
+	for _, m := range re.FindAllStringSubmatch(sqlStr, -1) {
+		isExaminer := strings.EqualFold(m[2], "EXAMINER")
+		switch {
+		case m[1] == "=" && isExaminer:
+			eqExaminer = true
+		case m[1] == "=":
+			eqOther = true
+		case isExaminer:
+			neExaminer = true
+		default:
+			neOther = true
 		}
-		// Source is filtered to something other than EXAMINER; exclude notes
+	}
+
+	switch {
+	case eqExaminer:
+		return true
+	case eqOther:
+		return false
+	case neExaminer:
+		return false
+	case neOther:
+		return true
+	}
+
+	// Other literal source comparisons (IN-lists, LIKE) can't be resolved by
+	// this heuristic; fail closed rather than guess.
+	reAmbiguous := regexp.MustCompile(`(?i)\bsource\s*(?:\bin\b|\bnot\s+in\b|\blike\b|\bnot\s+like\b)\s*[('"]`)
+	if reAmbiguous.MatchString(sqlStr) {
 		return false
 	}
 
-	// Exclude notes when the advanced search explicitly filters out EXAMINER
-	reNotEq := regexp.MustCompile(`(?i)\bsource\s*(!=|<>)\s*'EXAMINER'`)
-	if reNotEq.MatchString(sqlStr) {
-		return false
-	}
-
-	// No source filter found; include examiner notes
+	// No resolvable or ambiguous literal source filter found; include examiner notes.
 	return true
 }
 

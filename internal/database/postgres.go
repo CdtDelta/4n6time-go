@@ -106,18 +106,34 @@ func (db *PostgresStore) Close() error {
 // Path returns a sanitized connection string with the password removed,
 // suitable for display in the UI.
 func (db *PostgresStore) Path() string {
-	u, err := url.Parse(db.connStr)
+	return MaskConnStr(db.connStr)
+}
+
+// MaskConnStr returns connStr with any password removed, suitable for
+// display in the UI or writing to a log. It parses the string with net/url;
+// if parsing fails, it falls back to replacing everything between the last
+// colon before '@' and the '@' itself with "****" so the password is not
+// exposed.
+func MaskConnStr(connStr string) string {
+	u, err := url.Parse(connStr)
 	if err != nil {
-		// Fallback: replace everything between the last colon before @ and the @
-		// with **** so the password is not exposed.
-		if idx := strings.LastIndex(db.connStr, "@"); idx != -1 {
+		if idx := strings.LastIndex(connStr, "@"); idx != -1 {
 			credEnd := idx
-			credStart := strings.LastIndex(db.connStr[:credEnd], ":")
+			credStart := strings.LastIndex(connStr[:credEnd], ":")
 			if credStart != -1 {
-				return db.connStr[:credStart+1] + "****" + db.connStr[credEnd:]
+				return connStr[:credStart+1] + "****" + connStr[credEnd:]
 			}
 		}
-		return db.connStr
+		return connStr
+	}
+	// Return the input untouched when there is no password to strip. Setting
+	// u.User unconditionally would make String() emit a stray "@" (or "//@"
+	// for non-URL strings) when no credentials were present.
+	if u.User == nil {
+		return connStr
+	}
+	if _, hasPassword := u.User.Password(); !hasPassword {
+		return connStr
 	}
 	u.User = url.User(u.User.Username())
 	return u.String()

@@ -446,3 +446,41 @@ func TestRawQuerySetRawWhere(t *testing.T) {
 		t.Errorf("expected updated WHERE, got: %s", sql)
 	}
 }
+
+func TestValidateRawWhere(t *testing.T) {
+	tests := []struct {
+		name    string
+		where   string
+		wantErr string // substring of the expected error; "" means valid
+	}{
+		{"plain clause", "source = 'FILE' AND host = 'WS1'", ""},
+		{"semicolon inside literal", "desc = 'a;b'", ""},
+		{"escaped quote", "desc = 'it''s here'", ""},
+		{"escaped quote then semicolon in literal", "desc = 'it''s;here'", ""},
+		{"double dash inside literal", "desc = 'a--b'", ""},
+		{"block comment opener inside literal", "desc = 'a/*b'", ""},
+		{"bare semicolon", "1=1; DROP TABLE log2timeline", "semicolons are not permitted"},
+		{"line comment quote bypass", "1=1 --'\n; DROP TABLE log2timeline; --", "comments are not permitted"},
+		{"block comment quote bypass", "1=1 /* ' */ ; DROP TABLE log2timeline", "comments are not permitted"},
+		{"trailing line comment", "source = 'FILE' --", "comments are not permitted"},
+		{"semicolon after escaped quote closes literal", "desc = 'it''s'; DROP TABLE log2timeline", "semicolons are not permitted"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateRawWhere(tt.where)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("ValidateRawWhere(%q) = %v, want nil", tt.where, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("ValidateRawWhere(%q) = nil, want error containing %q", tt.where, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("ValidateRawWhere(%q) = %q, want error containing %q", tt.where, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}

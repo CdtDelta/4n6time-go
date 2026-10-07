@@ -678,3 +678,53 @@ func TestGetTimelineHistogramRawWhere(t *testing.T) {
 		t.Errorf("expected 2 events matching host=HOST-A, got %d", total)
 	}
 }
+
+func TestShouldIncludeExaminerNotes(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want bool
+	}{
+		// Comment marker check runs before anything else.
+		{"no-notes marker", "/* no-notes */ SELECT * FROM log2timeline WHERE source = 'EXAMINER'", false},
+
+		// Rule 1: any source = 'EXAMINER' includes.
+		{"rule 1 eq examiner", "SELECT * FROM log2timeline WHERE source = 'EXAMINER'", true},
+		{"rule 1 eq examiner case-insensitive", "SELECT * FROM log2timeline WHERE SOURCE = 'examiner'", true},
+		{"rule 1 beats eq other", "SELECT * FROM log2timeline WHERE source = 'FILE' OR source = 'EXAMINER'", true},
+		{"rule 1 beats ne examiner", "SELECT * FROM log2timeline WHERE source = 'EXAMINER' OR source != 'EXAMINER'", true},
+
+		// Rule 2: else any source = '<other>' excludes.
+		{"rule 2 eq other", "SELECT * FROM log2timeline WHERE source = 'FILE'", false},
+		{"rule 2 beats ne other (AND regression)", "SELECT * FROM log2timeline WHERE source = 'FILE' AND source != 'REGISTRY'", false},
+		{"rule 2 beats ne other with <>", "SELECT * FROM log2timeline WHERE source = 'FILE' AND source <> 'REGISTRY'", false},
+
+		// Rule 3: else any source != / <> 'EXAMINER' excludes.
+		{"rule 3 ne examiner", "SELECT * FROM log2timeline WHERE source != 'EXAMINER'", false},
+		{"rule 3 ltgt examiner", "SELECT * FROM log2timeline WHERE source <> 'EXAMINER'", false},
+		{"rule 3 beats ne other", "SELECT * FROM log2timeline WHERE source != 'REGISTRY' AND source != 'EXAMINER'", false},
+
+		// Rule 4: else any source != / <> '<other>' includes.
+		{"rule 4 ne other", "SELECT * FROM log2timeline WHERE source != 'REGISTRY'", true},
+		{"rule 4 ltgt other", "SELECT * FROM log2timeline WHERE source <> 'REGISTRY'", true},
+
+		// Rule 5: else ambiguous IN / LIKE forms exclude (fail closed).
+		{"rule 5 in-list containing examiner", "SELECT * FROM log2timeline WHERE source IN ('EXAMINER','FILE')", false},
+		{"rule 5 not in", "SELECT * FROM log2timeline WHERE source NOT IN ('FILE')", false},
+		{"rule 5 like", "SELECT * FROM log2timeline WHERE source LIKE 'EXAM%'", false},
+		{"rule 5 not like", "SELECT * FROM log2timeline WHERE source NOT LIKE 'FILE%'", false},
+
+		// Rule 6: no literal source filter includes.
+		{"rule 6 no source filter", "SELECT * FROM log2timeline WHERE host = 'WS1'", true},
+		{"rule 6 parameterized source", "SELECT * FROM log2timeline WHERE source = ?", true},
+		{"rule 6 sourcetype is not source", "SELECT * FROM log2timeline WHERE sourcetype = 'Registry Key'", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldIncludeExaminerNotes(tt.sql); got != tt.want {
+				t.Errorf("shouldIncludeExaminerNotes(%q) = %v, want %v", tt.sql, got, tt.want)
+			}
+		})
+	}
+}

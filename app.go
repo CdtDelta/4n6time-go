@@ -93,7 +93,7 @@ func (a *App) loadLoggingConfig() {
 	}
 	a.logPersist = cfg.Persist
 	if cfg.Persist && cfg.Enabled && cfg.FilePath != "" {
-		f, err := os.OpenFile(cfg.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		f, err := os.OpenFile(cfg.FilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if err != nil {
 			return
 		}
@@ -118,21 +118,7 @@ func (a *App) saveLoggingConfig() {
 		return
 	}
 	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, data, 0644)
-}
-
-// maskConnStr masks the password in a PostgreSQL connection string for safe logging.
-func maskConnStr(connStr string) string {
-	if idx := strings.Index(connStr, "://"); idx >= 0 {
-		rest := connStr[idx+3:]
-		if atIdx := strings.Index(rest, "@"); atIdx >= 0 {
-			userPart := rest[:atIdx]
-			if colonIdx := strings.Index(userPart, ":"); colonIdx >= 0 {
-				return connStr[:idx+3] + userPart[:colonIdx+1] + "****" + rest[atIdx:]
-			}
-		}
-	}
-	return connStr
+	os.WriteFile(path, data, 0600)
 }
 
 // startup is called when the app starts. The context is saved
@@ -645,6 +631,9 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
+	if err := query.ValidateRawWhere(whereClause); err != nil {
+		return nil, err
+	}
 	if pageSize <= 0 {
 		pageSize = 1000
 	}
@@ -1101,6 +1090,9 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 		if req.SearchMode == "advanced" {
 			// Advanced mode: SearchText is a raw SQL WHERE fragment. Inject it
 			// directly. Apply PostgreSQL reserved-word quoting when needed.
+			if err := query.ValidateRawWhere(req.SearchText); err != nil {
+				return nil, err
+			}
 			clause := req.SearchText
 			if a.driver == "postgres" {
 				clause = quotePostgresReservedWords(clause)
@@ -1316,7 +1308,7 @@ func (a *App) ConnectPostgres(host, port, dbName, user, password, sslMode string
 
 	a.store = store
 	a.driver = "postgres"
-	a.logInfo("Connected to PostgreSQL: " + maskConnStr(connStr))
+	a.logInfo("Connected to PostgreSQL: " + database.MaskConnStr(connStr))
 	return a.getDBInfo()
 }
 
@@ -1354,7 +1346,7 @@ func (a *App) CreatePostgresDatabase(host, port, dbName, user, password, sslMode
 
 	a.store = store
 	a.driver = "postgres"
-	a.logInfo("Created PostgreSQL schema and connected: " + maskConnStr(connStr))
+	a.logInfo("Created PostgreSQL schema and connected: " + database.MaskConnStr(connStr))
 	return a.getDBInfo()
 }
 
@@ -1385,7 +1377,7 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 	connStr := u.String()
 
 	pushStart := time.Now()
-	a.logInfo("Push to PostgreSQL started: " + maskConnStr(connStr))
+	a.logInfo("Push to PostgreSQL started: " + database.MaskConnStr(connStr))
 
 	// Verify SQLite has data before creating the PostgreSQL schema
 	sourceCount, err := a.store.CountEvents("", nil)
@@ -1547,7 +1539,7 @@ func (a *App) SetTabLimit(limit int) error {
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return nil
@@ -1606,7 +1598,7 @@ func (a *App) SetAutoRestoreTabs(enabled bool) error {
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return nil
@@ -1647,7 +1639,7 @@ func (a *App) SetPostgresHost(host string) error {
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return nil
@@ -1792,7 +1784,7 @@ func (a *App) EnableLogging() (string, error) {
 	if a.logFile != nil {
 		a.logFile.Close()
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		a.logMu.Unlock()
 		return "", fmt.Errorf("opening log file: %w", err)
