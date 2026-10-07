@@ -291,6 +291,7 @@ function App() {
       page: page,
       pageSize: PAGE_SIZE,
       searchText: activeSearch,
+      searchMode: searchMode,
       bookmarkOnly: bookmarkOnly,
       baseField: bq?.field || '',
       baseOp: bq?.op || '',
@@ -312,7 +313,7 @@ function App() {
     }
 
     return req
-  }, [activeFilters, activeSearch, bookmarkOnly])
+  }, [activeFilters, activeSearch, searchMode, bookmarkOnly])
 
   const loadPage = useCallback(async (page, info, filterState) => {
     const db = info || dbInfo

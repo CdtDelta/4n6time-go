@@ -631,9 +631,6 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
-	if err := query.ValidateRawWhere(whereClause); err != nil {
-		return nil, err
-	}
 	if pageSize <= 0 {
 		pageSize = 1000
 	}
@@ -641,16 +638,10 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 		page = 1
 	}
 
-	// On PostgreSQL, auto-quote reserved word column names so users don't have to
-	if a.driver == "postgres" {
-		whereClause = quotePostgresReservedWords(whereClause)
+	rq, err := a.buildAdvancedQuery(whereClause, pageSize, page)
+	if err != nil {
+		return nil, err
 	}
-
-	rq := query.NewRaw(pageSize, whereClause)
-	rq.SetDialect(a.queryDialect())
-	rq.SetPage(page)
-	rq.OrderBy("datetime")
-
 	sqlStr, args := rq.Build()
 	countSQL, countArgs := rq.BuildCount()
 
@@ -672,6 +663,48 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 		Page:       page,
 		PageSize:   pageSize,
 	}, nil
+}
+
+// buildAdvancedQuery validates a raw advanced-search WHERE clause and builds
+// the query that runs it. AdvancedSearch and ExportCSV share this so the
+// exported rows always match the grid. The examiner notes UNION is not
+// decided here: callers pass a nil NotesFilter to ExecuteQuery, and the store
+// applies shouldIncludeExaminerNotes to the built SQL.
+func (a *App) buildAdvancedQuery(whereClause string, pageSize, page int) (*query.RawQuery, error) {
+	if err := query.ValidateRawWhere(whereClause); err != nil {
+		return nil, err
+	}
+
+	// On PostgreSQL, auto-quote reserved word column names so users don't have to
+	if a.driver == "postgres" {
+		whereClause = quotePostgresReservedWords(whereClause)
+	}
+
+	rq := query.NewRaw(pageSize, whereClause)
+	rq.SetDialect(a.queryDialect())
+	rq.SetPage(page)
+	rq.OrderBy("datetime")
+	return rq, nil
+}
+
+// advancedClauseWithBase prepends a tab's base query to a raw advanced-search
+// clause. It mirrors the prefix the frontend builds before calling
+// AdvancedSearch, so ExportCSV, which receives the base query as separate
+// fields, produces the same clause the grid ran. The field and operator are
+// interpolated into SQL, so both are checked against fixed allowlists; the
+// value is a quoted literal with embedded quotes doubled.
+func advancedClauseWithBase(clause, baseField, baseOp, baseValue string) (string, error) {
+	if baseField == "" {
+		return clause, nil
+	}
+	if !isValidModelField(baseField) {
+		return "", fmt.Errorf("invalid base field: %s", baseField)
+	}
+	if baseOp != "=" && baseOp != "LIKE" {
+		return "", fmt.Errorf("invalid base operator: %s", baseOp)
+	}
+	safeVal := strings.ReplaceAll(baseValue, "'", "''")
+	return fmt.Sprintf("%s %s '%s' AND (%s)", baseField, baseOp, safeVal, clause), nil
 }
 
 // quotePostgresReservedWords replaces standalone occurrences of desc, user, and
@@ -769,6 +802,13 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 		return "", fmt.Errorf("no database open")
 	}
 
+	// Reject an invalid advanced clause before asking where to save.
+	if isAdvancedSearch(req) {
+		if err := query.ValidateRawWhere(req.SearchText); err != nil {
+			return "", err
+		}
+	}
+
 	// Ask where to save
 	savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
 		Title:           "Export to CSV",
@@ -784,8 +824,75 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 		return "", nil // user cancelled
 	}
 
+	return a.exportCSVTo(savePath, req, func(msg string) {
+		runtime.EventsEmit(a.ctx, "export:status", msg)
+	})
+}
+
+// exportPageSize is the LIMIT used for exports, large enough to be unlimited.
+const exportPageSize = 999999999
+
+// isAdvancedSearch reports whether req carries a raw advanced-search clause.
+// An advanced-mode request with empty search text runs the simple path, the
+// same way the grid falls back to QueryEvents when there is no clause.
+func isAdvancedSearch(req QueryRequest) bool {
+	return req.SearchMode == "advanced" && req.SearchText != ""
+}
+
+// exportCSVTo runs the export query for req and writes the matching events to
+// savePath. status receives progress messages. In advanced mode the query is
+// built exactly as AdvancedSearch builds it, so the file matches the grid;
+// filter panel filters and the bookmark toggle are ignored there, as they
+// are by AdvancedSearch.
+func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)) (string, error) {
+	var sqlStr string
+	var args []interface{}
+	var notesFilter *database.NotesFilter
+
+	if isAdvancedSearch(req) {
+		if err := query.ValidateRawWhere(req.SearchText); err != nil {
+			return "", err
+		}
+		clause, err := advancedClauseWithBase(req.SearchText, req.BaseField, req.BaseOp, req.BaseValue)
+		if err != nil {
+			return "", fmt.Errorf("building advanced export clause: %w", err)
+		}
+		rq, err := a.buildAdvancedQuery(clause, exportPageSize, 1)
+		if err != nil {
+			return "", err
+		}
+		// AdvancedSearch passes a nil NotesFilter; the store decides the
+		// examiner notes UNION from the SQL text alone.
+		sqlStr, args = rq.Build()
+	} else {
+		sqlStr, args, notesFilter = a.buildSimpleExportQuery(req)
+	}
+
+	status("Querying events...")
+
+	events, err := a.store.ExecuteQuery(sqlStr, args, notesFilter)
+	if err != nil {
+		return "", fmt.Errorf("querying events: %w", err)
+	}
+
+	status(fmt.Sprintf("Writing %d events to CSV...", len(events)))
+
+	if err := csvparser.WriteEvents(savePath, events); err != nil {
+		return "", fmt.Errorf("writing CSV: %w", err)
+	}
+
+	status("Done")
+
+	a.logInfo(fmt.Sprintf("Export CSV: %d events to %s", len(events), savePath))
+	return fmt.Sprintf("Exported %d events to %s", len(events), savePath), nil
+}
+
+// buildSimpleExportQuery builds the keyword/filter export query and its
+// examiner notes filter. Behavior is unchanged from the original inline
+// ExportCSV construction.
+func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, *database.NotesFilter) {
 	// Build query without pagination to get all matching events
-	q := query.New(999999999) // effectively unlimited
+	q := query.New(exportPageSize)
 	q.SetDialect(a.queryDialect())
 
 	if req.Logic == "OR" {
@@ -873,24 +980,7 @@ func (a *App) ExportCSV(req QueryRequest) (string, error) {
 	if !excludeExportNotes {
 		exportNotesFilter = buildNotesFilter(req, a.queryDialect(), len(args)+1)
 	}
-
-	runtime.EventsEmit(a.ctx, "export:status", "Querying events...")
-
-	events, err := a.store.ExecuteQuery(sqlStr, args, exportNotesFilter)
-	if err != nil {
-		return "", fmt.Errorf("querying events: %w", err)
-	}
-
-	runtime.EventsEmit(a.ctx, "export:status", fmt.Sprintf("Writing %d events to CSV...", len(events)))
-
-	if err := csvparser.WriteEvents(savePath, events); err != nil {
-		return "", fmt.Errorf("writing CSV: %w", err)
-	}
-
-	runtime.EventsEmit(a.ctx, "export:status", "Done")
-
-	a.logInfo(fmt.Sprintf("Export CSV: %d events to %s", len(events), savePath))
-	return fmt.Sprintf("Exported %d events to %s", len(events), savePath), nil
+	return sqlStr, args, exportNotesFilter
 }
 
 // -- Metadata Operations --
