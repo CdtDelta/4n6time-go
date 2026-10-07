@@ -125,7 +125,7 @@ func ReadEvents(path string, dateFrom, dateTo string, limit int, onProgress func
 
 // WriteEvents writes events to a CSV file in 4n6time export format.
 func WriteEvents(path string, events []*model.Event) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("creating file: %w", err)
 	}
@@ -224,7 +224,7 @@ func ReadColorCoding(path string) (*ColorCoding, error) {
 
 // WriteColorCoding writes a color coding template to CSV.
 func WriteColorCoding(path string, fieldName string, mapping map[string]string) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("creating file: %w", err)
 	}
@@ -302,7 +302,7 @@ func ReadSavedQueries(path string) ([]SavedQueryEntry, error) {
 
 // WriteSavedQueries writes saved queries to a CSV file.
 func WriteSavedQueries(path string, queries []SavedQueryEntry) error {
-	f, err := os.Create(path)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("creating file: %w", err)
 	}
