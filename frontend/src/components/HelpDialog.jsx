@@ -80,7 +80,10 @@ Not permitted: Semicolons and SQL comments (-- and /*) are rejected with an erro
 
 Saving advanced queries: Click the Save button (floppy disk icon) to save the current SQL query with a name. Saved advanced queries appear in the Saved Queries panel with a "SQL:" prefix. Loading a saved advanced query automatically switches to SQL mode.
 
-Advanced search works alongside the bookmark-only filter. If both are active, only bookmarked events matching the WHERE clause are returned.`
+What applies in advanced mode: The WHERE clause is the whole query. Only the clause and the current tab's base query (for tabs opened with right-click) are applied, to the grid, the histogram, and Export CSV alike. The filter panel, the date range, the bookmark-only toggle, and histogram click and drag-to-select do not apply in advanced mode, so they are disabled while it is active. Their settings are kept and apply again when you switch back to simple mode. To filter on these in advanced mode, add the condition to your clause, for example:
+
+desc LIKE '%malware%' AND bookmark = 1
+host = 'WS1' AND datetime BETWEEN '2025-01-01' AND '2025-01-31 23:59:59'`
   },
   {
     id: 'bookmarks',
@@ -101,6 +104,8 @@ Bookmarks work alongside filters and search. When the bookmark filter is active,
 The histogram automatically adjusts its time buckets based on the date range of your data: monthly buckets for multi-year spans, daily for within a single year, and hourly for a single day.
 
 Clicking a bar in the histogram sets the date range filter to that time period and opens the filter panel. This lets you quickly drill into activity spikes. The histogram also respects active filters and search terms, so you can see the time distribution of your filtered results.
+
+In advanced search (SQL) mode, the histogram shows the distribution for the WHERE clause (and the tab's base query) only, matching the grid. Click and drag-to-select are disabled there because the date range filter does not apply; add a datetime condition to the clause instead.
 
 Hovering over a bar shows the time period and event count.`
   },
@@ -227,7 +232,7 @@ Note: There is no undo for an import. If you import the wrong file, you would ne
     title: 'Exporting Data',
     content: `Export your current view to a CSV file using File > Export CSV or the Export CSV button in the toolbar.
 
-The export respects your current filters, search, date range, and bookmark-only filter. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
+In simple mode, the export respects your current filters, search, date range, and bookmark-only filter. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
 
 In advanced search (SQL) mode, the export contains exactly the rows shown in the grid: the same WHERE clause, the same tab base query, and the same examiner notes.
 

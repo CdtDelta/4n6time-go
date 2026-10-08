@@ -345,10 +345,13 @@ function App() {
         setTotalCount(result.totalCount)
         setCurrentPage(result.page)
 
-        const filterCount = (filterState || activeFilters)?.filters?.length || 0
+        // An advanced clause is the whole query, so the status line does not
+        // report filter panel or bookmark-only state that is not applied.
+        const advancedActive = searchMode === 'advanced' && activeSearch
+        const filterCount = advancedActive ? 0 : ((filterState || activeFilters)?.filters?.length || 0)
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
         const searchLabel = activeSearch ? (searchMode === 'advanced' ? ' | Advanced: ' + activeSearch : ` | Search: "${activeSearch}"`) : ''
-        const bookmarkLabel = bookmarkOnly ? ' | ★ Bookmarked only' : ''
+        const bookmarkLabel = bookmarkOnly && !advancedActive ? ' | ★ Bookmarked only' : ''
         setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}${bookmarkLabel}`)
       }
     } catch (err) {
@@ -1313,7 +1316,11 @@ function App() {
         <button
           className={`bookmark-filter-btn ${bookmarkOnly ? 'active' : ''}`}
           onClick={() => setBookmarkOnly(prev => !prev)}
-          title={bookmarkOnly ? 'Show all events' : 'Show bookmarked only'}
+          disabled={searchMode === 'advanced'}
+          style={searchMode === 'advanced' ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+          title={searchMode === 'advanced'
+            ? 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
+            : (bookmarkOnly ? 'Show all events' : 'Show bookmarked only')}
         >
           {bookmarkOnly ? '★' : '☆'}
         </button>
@@ -1488,6 +1495,7 @@ function App() {
           activeFilters={activeFilters}
           filterVersion={filterVersion}
           baseQuery={activeTab?.baseQuery || null}
+          disabled={searchMode === 'advanced'}
         />
 
         <SavedQueries

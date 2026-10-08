@@ -1160,25 +1160,34 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	// Always exclude junk dates (zeroed, pre-epoch, far-future)
 	alwaysParts = append(alwaysParts, "datetime > '1970-01-01' AND datetime < '2100-01-01'")
 
-	for _, f := range req.Filters {
-		if !isValidModelField(f.Field) {
-			continue
-		}
-		switch f.Operator {
-		case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
-			val := f.Value
-			if f.Field == "datetime" {
-				val = normalizeDate(val, f.Operator == "<=")
+	// In advanced mode the clause is the whole user query, matching
+	// AdvancedSearch and advanced-mode export: filter panel filters (which
+	// carry the date range) and bookmark-only are not applied. The base query
+	// still applies through alwaysParts. An advanced request with no clause
+	// falls back to the simple path, as the grid does.
+	advanced := isAdvancedSearch(req)
+
+	if !advanced {
+		for _, f := range req.Filters {
+			if !isValidModelField(f.Field) {
+				continue
 			}
-			userParts = append(userParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
-			paramIdx++
-			whereArgs = append(whereArgs, val)
+			switch f.Operator {
+			case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
+				val := f.Value
+				if f.Field == "datetime" {
+					val = normalizeDate(val, f.Operator == "<=")
+				}
+				userParts = append(userParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
+				paramIdx++
+				whereArgs = append(whereArgs, val)
+			}
 		}
 	}
 
 	// Full-text or advanced search
 	if req.SearchText != "" {
-		if req.SearchMode == "advanced" {
+		if advanced {
 			// Advanced mode: SearchText is a raw SQL WHERE fragment. Inject it
 			// directly. Apply PostgreSQL reserved-word quoting when needed.
 			if err := query.ValidateRawWhere(req.SearchText); err != nil {
@@ -1206,8 +1215,8 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 		}
 	}
 
-	// Bookmark filter
-	if req.BookmarkOnly {
+	// Bookmark filter (simple mode only; see advanced above)
+	if req.BookmarkOnly && !advanced {
 		userParts = append(userParts, "bookmark = 1")
 	}
 

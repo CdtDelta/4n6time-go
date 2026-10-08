@@ -6,6 +6,8 @@ import {
 import { GetTimelineHistogram } from '../../wailsjs/go/main/App'
 import themes from '../themes'
 
+const ADVANCED_MODE_TIP = 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
+
 function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeSearch, searchMode, bookmarkOnly, baseQuery, histogramSuppressRef, histogramVersion }) {
   const [data, setData] = useState([])
   const [loading, setLoading] = useState(false)
@@ -169,6 +171,11 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
 
   if (!visible) return null
 
+  // Click-to-filter and drag-to-select set the filter panel date range, which
+  // advanced mode does not apply, so they are off there. The chart still
+  // renders and refetches for the active clause.
+  const interactionsDisabled = searchMode === 'advanced'
+
   // Read theme colors directly from theme definitions
   const themeVars = themes[theme]?.vars || {}
   const barFill = themeVars['--color-bar-fill'] || '#533483'
@@ -176,11 +183,13 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
   const mutedColor = themeVars['--text-muted'] || '#808080'
 
   return (
-    <div className="timeline-chart">
+    <div className="timeline-chart" title={interactionsDisabled ? ADVANCED_MODE_TIP : undefined}>
       <div className="timeline-header">
         <span className="timeline-title">Timeline</span>
         {loading && <span className="timeline-loading">Loading...</span>}
-        <span className="timeline-hint">Click and drag to select a time range</span>
+        <span className="timeline-hint">
+          {interactionsDisabled ? 'Range selection not applied in advanced search mode' : 'Click and drag to select a time range'}
+        </span>
       </div>
       <div className="timeline-body">
         {data.length === 0 && !loading ? (
@@ -189,9 +198,10 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
           <ResponsiveContainer width="100%" height={140}>
             <BarChart
               data={data}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
+              onMouseDown={interactionsDisabled ? undefined : handleMouseDown}
+              onMouseMove={interactionsDisabled ? undefined : handleMouseMove}
+              onMouseUp={interactionsDisabled ? undefined : handleMouseUp}
+              style={interactionsDisabled ? { cursor: 'not-allowed' } : undefined}
             >
               <CartesianGrid strokeDasharray="3 3" stroke={borderColor} vertical={false} />
               <XAxis

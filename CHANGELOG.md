@@ -2,6 +2,13 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.15.1 (2026-10-07)
+
+### Bug fixes
+
+- **Advanced search histogram now matches the grid.** In advanced (SQL) mode the grid, result count, and CSV export run only the tab's base query and the WHERE clause, but the histogram also applied the filter panel, date range, and bookmark-only toggle, so the two could show different events. The histogram now applies only the base query and the clause as well.
+- **Controls that do not apply in advanced mode are disabled.** The filter panel (field filters, AND/OR, date range), the bookmark-only toggle, and histogram click and drag-to-select are disabled in advanced mode, with a tooltip explaining that they are not applied. Their values are kept and come back when you switch to simple mode. To filter by bookmark or date in advanced mode, add `bookmark = 1` or a `datetime` condition to the WHERE clause.
+
 ## v0.15.0 (2026-10-07)
 
 ### New parsers

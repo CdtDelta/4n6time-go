@@ -335,3 +335,131 @@ func TestExportCSVSimpleUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// newHistogramTestApp returns an App backed by a SQLite database seeded with
+// events across two hosts, some bookmarked. It holds no examiner notes: the
+// store's histogram query never counts notes in any mode, while the grid's
+// UNION can include them, so notes would make the totals differ for a reason
+// unrelated to filter handling.
+func newHistogramTestApp(t *testing.T) *App {
+	t.Helper()
+	store, err := database.CreateStore("sqlite", filepath.Join(t.TempDir(), "histogram.db"), nil)
+	if err != nil {
+		t.Fatalf("creating SQLite store: %v", err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	seed := []*model.Event{
+		{Datetime: "2026-01-01 00:00:01", Source: "FILE", Host: "WS1", Desc: "evil.exe created", Bookmark: 1},
+		{Datetime: "2026-01-01 00:00:02", Source: "REG", Host: "WS1", Desc: "evil run key"},
+		{Datetime: "2026-01-01 00:00:03", Source: "FILE", Host: "WS1", Desc: "benign.txt created"},
+		{Datetime: "2026-01-02 00:00:04", Source: "FILE", Host: "WS2", Desc: "evil.dll loaded", Bookmark: 1},
+		{Datetime: "2026-01-02 00:00:05", Source: "EVT", Host: "WS2", Desc: "logon type 3"},
+		{Datetime: "2026-01-03 00:00:07", Source: "FILE", Host: "WS1", Desc: "evil.ps1 written"},
+	}
+	for _, e := range seed {
+		if err := store.InsertEvent(e); err != nil {
+			t.Fatalf("inserting event: %v", err)
+		}
+	}
+	return &App{store: store, driver: "sqlite"}
+}
+
+// histogramTotal sums every bucket the histogram returns for req.
+func histogramTotal(t *testing.T, app *App, req QueryRequest) int64 {
+	t.Helper()
+	buckets, err := app.GetTimelineHistogram(req)
+	if err != nil {
+		t.Fatalf("GetTimelineHistogram: %v", err)
+	}
+	var total int64
+	for _, b := range buckets {
+		total += b.Count
+	}
+	return total
+}
+
+// TestAdvancedHistogramIgnoresFilterPanelAndBookmark verifies the advanced
+// histogram applies only the clause, matching AdvancedSearch, even when the
+// request also carries bookmark-only, a filter panel filter, and a date range.
+func TestAdvancedHistogramIgnoresFilterPanelAndBookmark(t *testing.T) {
+	app := newHistogramTestApp(t)
+	const clause = "desc LIKE '%evil%'"
+
+	grid, err := app.AdvancedSearch(clause, 1, 100)
+	if err != nil {
+		t.Fatalf("AdvancedSearch: %v", err)
+	}
+	if grid.TotalCount != 4 {
+		t.Fatalf("AdvancedSearch TotalCount = %d, want 4 (fixture check)", grid.TotalCount)
+	}
+
+	got := histogramTotal(t, app, QueryRequest{
+		Logic:        "AND",
+		SearchText:   clause,
+		SearchMode:   "advanced",
+		BookmarkOnly: true,
+		Filters: []FilterItem{
+			{Field: "host", Operator: "=", Value: "WS2"},
+			{Field: "datetime", Operator: ">=", Value: "2026-01-02"},
+			{Field: "datetime", Operator: "<=", Value: "2026-01-02"},
+		},
+	})
+	// With the filters and bookmark-only applied the total would be 1
+	// (evil.dll on WS2, bookmarked, 2026-01-02).
+	if got != grid.TotalCount {
+		t.Errorf("advanced histogram total = %d, want %d (AdvancedSearch total)", got, grid.TotalCount)
+	}
+}
+
+// TestAdvancedHistogramAppliesBaseQuery verifies a pivot tab's base query
+// still narrows the advanced histogram, matching the grid's prefixed clause.
+func TestAdvancedHistogramAppliesBaseQuery(t *testing.T) {
+	app := newHistogramTestApp(t)
+	const clause = "desc LIKE '%evil%'"
+
+	// The grid's clause, prefixed the way App.jsx prefixes it for a pivot tab.
+	grid, err := app.AdvancedSearch("host = 'WS1' AND ("+clause+")", 1, 100)
+	if err != nil {
+		t.Fatalf("AdvancedSearch: %v", err)
+	}
+	if grid.TotalCount != 3 {
+		t.Fatalf("AdvancedSearch TotalCount = %d, want 3 (fixture check)", grid.TotalCount)
+	}
+
+	got := histogramTotal(t, app, QueryRequest{
+		Logic:        "AND",
+		SearchText:   clause,
+		SearchMode:   "advanced",
+		BookmarkOnly: true,
+		BaseField:    "host",
+		BaseOp:       "=",
+		BaseValue:    "WS1",
+	})
+	if got != grid.TotalCount {
+		t.Errorf("advanced histogram total with base query = %d, want %d", got, grid.TotalCount)
+	}
+}
+
+// TestSimpleHistogramBookmarkOnlyStillFilters guards simple mode: the
+// bookmark-only toggle and filter panel filters still narrow the histogram.
+func TestSimpleHistogramBookmarkOnlyStillFilters(t *testing.T) {
+	app := newHistogramTestApp(t)
+
+	if got := histogramTotal(t, app, QueryRequest{Logic: "AND", SearchMode: "simple", BookmarkOnly: true}); got != 2 {
+		t.Errorf("simple histogram bookmark-only total = %d, want 2", got)
+	}
+	if got := histogramTotal(t, app, QueryRequest{
+		Logic:        "AND",
+		SearchMode:   "simple",
+		BookmarkOnly: true,
+		Filters:      []FilterItem{{Field: "host", Operator: "=", Value: "WS2"}},
+	}); got != 1 {
+		t.Errorf("simple histogram bookmark-only + host filter total = %d, want 1", got)
+	}
+	// Advanced mode with an empty clause falls back to the simple path, as
+	// the grid does, so bookmark-only still applies.
+	if got := histogramTotal(t, app, QueryRequest{Logic: "AND", SearchMode: "advanced", BookmarkOnly: true}); got != 2 {
+		t.Errorf("advanced mode with empty clause, bookmark-only total = %d, want 2", got)
+	}
+}

@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { GetDistinctValues, GetMinMaxDate, GetFilteredDistinctValues, GetFilteredMinMaxDate } from '../../wailsjs/go/main/App'
 
-function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion, baseQuery }) {
+const ADVANCED_MODE_TIP = 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
+
+// disabled is set while advanced search mode is active. The controls keep
+// their values so switching back to simple mode restores them unchanged.
+function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion, baseQuery, disabled = false }) {
   const [filters, setFilters] = useState([])
   const [logic, setLogic] = useState('AND')
   const [dateFrom, setDateFrom] = useState('')
@@ -123,30 +127,42 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
   }, [dbInfo, onClear])
 
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !disabled) {
       handleApply()
     }
-  }, [handleApply])
+  }, [handleApply, disabled])
 
   if (!visible) return null
 
+  // Shared props for every control while advanced mode is active.
+  const tip = disabled ? ADVANCED_MODE_TIP : undefined
+  const sectionStyle = disabled ? { opacity: 0.5 } : undefined
+
   return (
-    <div className="filter-panel" onKeyDown={handleKeyDown}>
+    <div className="filter-panel" onKeyDown={handleKeyDown} title={tip}>
       <div className="filter-header">
         <span className="filter-title">Filters</span>
-        <div className="filter-logic">
+        <div className="filter-logic" style={sectionStyle}>
           <button
             className={logic === 'AND' ? 'active' : ''}
             onClick={() => setLogic('AND')}
+            disabled={disabled}
+            title={tip}
           >AND</button>
           <button
             className={logic === 'OR' ? 'active' : ''}
             onClick={() => setLogic('OR')}
+            disabled={disabled}
+            title={tip}
           >OR</button>
         </div>
       </div>
 
-      <div className="filter-date-range">
+      {disabled && (
+        <div className="filter-loading">{ADVANCED_MODE_TIP}</div>
+      )}
+
+      <div className="filter-date-range" style={sectionStyle}>
         <label>Date Range</label>
         <div className="date-inputs">
           <input
@@ -154,6 +170,8 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
             placeholder="YYYY-MM-DD HH:MM:SS"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
+            disabled={disabled}
+            title={tip}
           />
           <span className="date-separator">to</span>
           <input
@@ -161,16 +179,20 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
             placeholder="YYYY-MM-DD HH:MM:SS"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
+            disabled={disabled}
+            title={tip}
           />
         </div>
       </div>
 
-      <div className="filter-list">
+      <div className="filter-list" style={sectionStyle}>
         {filters.map((filter, i) => (
           <div key={i} className="filter-row">
             <select
               value={filter.field}
               onChange={(e) => updateFilter(i, 'field', e.target.value)}
+              disabled={disabled}
+              title={tip}
             >
               {filterFields.map(f => (
                 <option key={f.field} value={f.field}>{f.label}</option>
@@ -185,6 +207,8 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
             <select
               value={filter.operator}
               onChange={(e) => updateFilter(i, 'operator', e.target.value)}
+              disabled={disabled}
+              title={tip}
             >
               <option value="=">=</option>
               <option value="!=">!=</option>
@@ -197,6 +221,8 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
               <select
                 value={filter.value}
                 onChange={(e) => updateFilter(i, 'value', e.target.value)}
+                disabled={disabled}
+                title={tip}
               >
                 <option value="">-- select --</option>
                 {distinctValues[filter.field].map(v => (
@@ -209,18 +235,20 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
                 value={filter.value}
                 placeholder={filter.operator.includes('LIKE') ? '%pattern%' : 'value'}
                 onChange={(e) => updateFilter(i, 'value', e.target.value)}
+                disabled={disabled}
+                title={tip}
               />
             )}
 
-            <button className="filter-remove" onClick={() => removeFilter(i)}>x</button>
+            <button className="filter-remove" onClick={() => removeFilter(i)} disabled={disabled} title={tip}>x</button>
           </div>
         ))}
       </div>
 
-      <div className="filter-actions">
-        <button onClick={addFilter}>+ Add Filter</button>
-        <button className="filter-apply" onClick={handleApply}>Apply</button>
-        <button onClick={handleClear}>Clear</button>
+      <div className="filter-actions" style={sectionStyle}>
+        <button onClick={addFilter} disabled={disabled} title={tip}>+ Add Filter</button>
+        <button className="filter-apply" onClick={handleApply} disabled={disabled} title={tip}>Apply</button>
+        <button onClick={handleClear} disabled={disabled} title={tip}>Clear</button>
       </div>
 
       {loading && <div className="filter-loading">Loading filter values...</div>}
