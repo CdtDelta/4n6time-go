@@ -634,3 +634,33 @@ func TestInterfaceToInt64(t *testing.T) {
 		}
 	}
 }
+
+// --- UTF-8 BOM ---
+
+// TestBOMPrefixedFileValidatesAndImports covers a Plaso JSONL export with a
+// leading UTF-8 BOM. Before the fix, ValidateFile rejected it ("first line is
+// not a JSON object") and ReadEvents silently dropped the first event.
+func TestBOMPrefixedFileValidatesAndImports(t *testing.T) {
+	content := "\xEF\xBB\xBF" +
+		`{"timestamp": 1705312200000000, "datetime": "2024-01-15T10:30:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "message": "first event", "parser": "mft"}` + "\n" +
+		`{"timestamp": 1705312260000000, "datetime": "2024-01-15T10:31:00+00:00", "timestamp_desc": "Last Written", "source_short": "FILE", "message": "second event", "parser": "mft"}` + "\n"
+	path := writeTempFile(t, "bom.jsonl", content)
+
+	if err := ValidateFile(path); err != nil {
+		t.Fatalf("ValidateFile with BOM: %v", err)
+	}
+
+	result, err := ReadEvents(path, nil)
+	if err != nil {
+		t.Fatalf("ReadEvents with BOM: %v", err)
+	}
+	if result.Count != 2 {
+		t.Fatalf("Count = %d, want 2 (first event must not be dropped)", result.Count)
+	}
+	if result.Excluded != 0 {
+		t.Errorf("Excluded = %d, want 0", result.Excluded)
+	}
+	if !strings.Contains(result.Events[0].Desc, "first event") {
+		t.Errorf("first event desc = %q, want it to contain %q", result.Events[0].Desc, "first event")
+	}
+}

@@ -54,6 +54,7 @@ export namespace importer {
 	    totalFilesProcessed: number;
 	    directoriesWalked: number;
 	    maxDepthReached: number;
+	    toolFamilies: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImportSummary(source);
@@ -67,6 +68,7 @@ export namespace importer {
 	        this.totalFilesProcessed = source["totalFilesProcessed"];
 	        this.directoriesWalked = source["directoriesWalked"];
 	        this.maxDepthReached = source["maxDepthReached"];
+	        this.toolFamilies = source["toolFamilies"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

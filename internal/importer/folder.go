@@ -37,6 +37,21 @@ type ImportSummary struct {
 	TotalFilesProcessed int                  `json:"totalFilesProcessed"`
 	DirectoriesWalked   int                  `json:"directoriesWalked"`
 	MaxDepthReached     int                  `json:"maxDepthReached"`
+	// ToolFamilies maps each PerTool label to its tool family (for example
+	// "LECmd" to "EZ Tools") so the summary can group tools. Labels from an
+	// entry with no family are absent.
+	ToolFamilies map[string]string `json:"toolFamilies"`
+}
+
+// walkEntry is one file the folder walk considered, in walk order. Either
+// skipReason is set, or format and label identify how to import it.
+type walkEntry struct {
+	rel        string
+	path       string
+	depth      int
+	format     *Format
+	label      string
+	skipReason string
 }
 
 // recursiveFormats returns the registry entries recursive import may use,
@@ -66,16 +81,23 @@ func recursiveExtensions(formats []*Format) map[string]struct{} {
 // ImportFolderRecursive walks root up to 3 directory levels deep (root = depth 0),
 // detects and imports all files recognized by a Recursive registry entry, and
 // returns a summary. Symlinks are skipped without error. Files whose extension
-// no recursive entry claims are silently ignored.
+// no recursive entry claims are silently ignored. Duplicate UnifiedLog exports
+// of the same data are imported once; see markUnifiedLogDuplicates.
 // onProgress is called after each successfully imported file with the relative
 // path and the number of events inserted; it may be nil.
 func ImportFolderRecursive(root string, store database.Store, onProgress func(relPath string, eventsInserted int)) (*ImportSummary, error) {
 	summary := &ImportSummary{
-		PerTool: make(map[string]ToolStats),
+		PerTool:      make(map[string]ToolStats),
+		ToolFamilies: make(map[string]string),
 	}
 
-	formats := recursiveFormats()
-	allowedExts := recursiveExtensions(formats)
+	// Detection runs over the whole walk before anything is imported, because
+	// duplicate resolution needs to see every UnifiedLog file first.
+	entries, err := collectWalkEntries(root, summary)
+	if err != nil {
+		return nil, err
+	}
+	markUnifiedLogDuplicates(entries)
 
 	skip := func(rel, reason string) {
 		summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
@@ -84,6 +106,48 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 		})
 	}
 
+	for _, e := range entries {
+		if e.skipReason != "" {
+			skip(e.rel, e.skipReason)
+			continue
+		}
+
+		inserted, importErr := e.format.Import(e.path, store, nil)
+		if importErr != nil {
+			skip(e.rel, SkipReasonParseError+innerError(importErr).Error())
+			continue
+		}
+
+		stats := summary.PerTool[e.label]
+		stats.FileCount++
+		stats.EventCount += inserted
+		summary.PerTool[e.label] = stats
+		if e.format.Family != "" {
+			summary.ToolFamilies[e.label] = e.format.Family
+		}
+
+		summary.TotalEvents += inserted
+		summary.TotalFilesProcessed++
+		if e.depth > summary.MaxDepthReached {
+			summary.MaxDepthReached = e.depth
+		}
+
+		if onProgress != nil {
+			onProgress(e.rel, inserted)
+		}
+	}
+
+	return summary, nil
+}
+
+// collectWalkEntries walks root and detects every candidate file, returning
+// the files in walk order with either a detected format or a skip reason.
+// It counts walked directories into summary.
+func collectWalkEntries(root string, summary *ImportSummary) ([]walkEntry, error) {
+	formats := recursiveFormats()
+	allowedExts := recursiveExtensions(formats)
+
+	var entries []walkEntry
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip inaccessible entries
@@ -119,56 +183,35 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 			return nil
 		}
 
+		entry := walkEntry{rel: rel, path: path, depth: depth}
+
 		// Empty files produce no useful data.
 		info, err := d.Info()
 		if err != nil || info.Size() == 0 {
-			skip(rel, SkipReasonEmptyFile)
+			entry.skipReason = SkipReasonEmptyFile
+			entries = append(entries, entry)
 			return nil
 		}
 
 		format, label, detectErr := detectRecursive(formats, path, ext)
-		if format == nil {
-			if detectErr != nil {
-				skip(rel, SkipReasonParseError+detectErr.Error())
-			} else {
-				skip(rel, SkipReasonUnrecognizedFormat)
-			}
-			return nil
+		switch {
+		case format == nil && detectErr != nil:
+			entry.skipReason = SkipReasonParseError + detectErr.Error()
+		case format == nil:
+			entry.skipReason = SkipReasonUnrecognizedFormat
+		case format.HasTimeline != nil && !format.HasTimeline(label):
+			entry.skipReason = fmt.Sprintf("no timestamp columns (recognized as %s): no timeline data to import", label)
+		default:
+			entry.format = format
+			entry.label = label
 		}
-		if format.HasTimeline != nil && !format.HasTimeline(label) {
-			skip(rel, fmt.Sprintf("no timestamp columns (recognized as %s): no timeline data to import", label))
-			return nil
-		}
-
-		inserted, importErr := format.Import(path, store, nil)
-		if importErr != nil {
-			skip(rel, SkipReasonParseError+innerError(importErr).Error())
-			return nil
-		}
-
-		stats := summary.PerTool[label]
-		stats.FileCount++
-		stats.EventCount += inserted
-		summary.PerTool[label] = stats
-
-		summary.TotalEvents += inserted
-		summary.TotalFilesProcessed++
-		if depth > summary.MaxDepthReached {
-			summary.MaxDepthReached = depth
-		}
-
-		if onProgress != nil {
-			onProgress(rel, inserted)
-		}
-
+		entries = append(entries, entry)
 		return nil
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("walking directory: %w", err)
 	}
-
-	return summary, nil
+	return entries, nil
 }
 
 // detectRecursive tries each recursive format that claims ext, in registry

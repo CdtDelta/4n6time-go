@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cdtdelta/4n6time/internal/model"
+	"github.com/cdtdelta/4n6time/internal/textutil"
 )
 
 // ReadResult contains the outcome of a JSONL import operation.
@@ -27,7 +28,9 @@ func ValidateFile(path string) error {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	// Strip a leading UTF-8 BOM so it isn't mistaken for the first character
+	// of the JSON object.
+	scanner := bufio.NewScanner(textutil.NewBOMStrippingReader(f))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 
 	if !scanner.Scan() {
@@ -75,7 +78,9 @@ func ReadEvents(path string, onProgress func(count int)) (*ReadResult, error) {
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
+	// Strip a leading UTF-8 BOM; otherwise the first line fails to parse and
+	// its event is silently counted as excluded.
+	scanner := bufio.NewScanner(textutil.NewBOMStrippingReader(f))
 	// Allow up to 10MB per line (some Plaso events can be very large)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
 

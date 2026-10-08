@@ -16,6 +16,7 @@ import (
 	"github.com/cdtdelta/4n6time/internal/jsonlparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/tlnparser"
+	"github.com/cdtdelta/4n6time/internal/unifiedlogparser"
 )
 
 // Format display names. These also appear in log lines and progress messages.
@@ -25,6 +26,15 @@ const (
 	FormatEZTools    = "EZ Tools CSV"
 	FormatL2TCSV     = "CSV"
 	FormatDynamicCSV = "Dynamic CSV"
+
+	FormatUnifiedLogCSV   = "UnifiedLog (CSV)"
+	FormatUnifiedLogJSONL = "UnifiedLog (JSONL)"
+)
+
+// Tool family names used to group the recursive import summary.
+const (
+	FamilyEZTools    = "EZ Tools"
+	FamilyUnifiedLog = "UnifiedLog"
 )
 
 // ErrUnrecognizedFormat is returned by DetectFile when no registry entry
@@ -81,8 +91,9 @@ type Format struct {
 	// files with any extension.
 	Extensions []string
 	// Exclusive means a file whose extension is in Extensions can only be
-	// this format; single-file import fails instead of trying later entries
-	// when Detect rejects it.
+	// one of the entries claiming that extension exclusively. Single-file
+	// import tries those claimants in registry order and fails, rather than
+	// falling through to other formats, when none of them detect the file.
 	Exclusive bool
 	// Detect reports whether path is this format. label is the per-tool name
 	// shown in the recursive import summary. A non-nil err means detection
@@ -97,6 +108,9 @@ type Format struct {
 	Import func(path string, store database.Store, p *Progress) (int, error)
 	// Recursive reports whether recursive folder import may use this entry.
 	Recursive bool
+	// Family groups related entries in the recursive import summary. Entries
+	// that are not Recursive may leave it empty.
+	Family string
 }
 
 func (f *Format) hasExtension(ext string) bool {
@@ -112,7 +126,24 @@ func (f *Format) hasExtension(ext string) bool {
 // entry whose Detect accepts a file wins. Dynamic CSV accepts almost any CSV,
 // so it must stay last and must never be Recursive, otherwise every
 // unrecognized CSV in a folder walk would import instead of being skipped.
+//
+// UnifiedLog JSONL precedes Plaso JSONL because a Unified Log record also
+// satisfies Plaso's psort shape check (it has "timestamp" and "message").
+// UnifiedLog CSV precedes EZ Tools CSV; its required columns do not occur in
+// any EZ Tools header.
+//
+// The UnifiedLog entries leave HasTimeline nil: every record they import has
+// a timestamp, and records without one are skipped during parsing.
 var Registry = []Format{
+	{
+		Name:       FormatUnifiedLogJSONL,
+		Extensions: []string{".jsonl"},
+		Exclusive:  true,
+		Detect:     detectUnifiedLogJSONL,
+		Import:     importUnifiedLogJSONL,
+		Recursive:  true,
+		Family:     FamilyUnifiedLog,
+	},
 	{
 		Name:       FormatJSONL,
 		Extensions: []string{".jsonl", ".json"},
@@ -128,12 +159,21 @@ var Registry = []Format{
 		Import:     importTLN,
 	},
 	{
+		Name:       FormatUnifiedLogCSV,
+		Extensions: []string{".csv"},
+		Detect:     detectUnifiedLogCSV,
+		Import:     importUnifiedLogCSV,
+		Recursive:  true,
+		Family:     FamilyUnifiedLog,
+	},
+	{
 		Name:        FormatEZTools,
 		Extensions:  []string{".csv"},
 		Detect:      detectEZTools,
 		HasTimeline: ezToolsHasTimeline,
 		Import:      importEZTools,
 		Recursive:   true,
+		Family:      FamilyEZTools,
 	},
 	{
 		Name:       FormatL2TCSV,
@@ -151,22 +191,51 @@ var Registry = []Format{
 
 // DetectFile walks the registry in order and returns the first format that
 // accepts path, along with its detection label.
+//
+// If the file's extension is claimed exclusively, only the claimants are
+// tried, in registry order. When none detect the file, the error names the
+// last claimant and carries its detection error. The last claimant is the
+// general-purpose format for that extension (Plaso JSONL for .jsonl), so the
+// error text is the same one users saw before other claimants existed.
 func DetectFile(path string) (*Format, string, error) {
 	ext := strings.ToLower(filepath.Ext(path))
+
+	if claimants := exclusiveClaimants(ext); len(claimants) > 0 {
+		var lastErr error
+		for _, f := range claimants {
+			label, ok, err := f.Detect(path)
+			if ok {
+				return f, label, nil
+			}
+			lastErr = err
+		}
+		if lastErr == nil {
+			lastErr = errors.New("format not detected")
+		}
+		last := claimants[len(claimants)-1]
+		return nil, "", fmt.Errorf("invalid %s file: %w", last.Name, lastErr)
+	}
+
 	for i := range Registry {
 		f := &Registry[i]
-		label, ok, err := f.Detect(path)
-		if ok {
+		if label, ok, _ := f.Detect(path); ok {
 			return f, label, nil
-		}
-		if f.Exclusive && f.hasExtension(ext) {
-			if err == nil {
-				err = errors.New("format not detected")
-			}
-			return nil, "", fmt.Errorf("invalid %s file: %w", f.Name, err)
 		}
 	}
 	return nil, "", ErrUnrecognizedFormat
+}
+
+// exclusiveClaimants returns the entries that claim ext exclusively, in
+// registry order.
+func exclusiveClaimants(ext string) []*Format {
+	var out []*Format
+	for i := range Registry {
+		f := &Registry[i]
+		if f.Exclusive && f.hasExtension(ext) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // insertEvents hands parsed events to the store and reports progress.
@@ -181,6 +250,45 @@ func insertEvents(store database.Store, events []*model.Event, p *Progress) (int
 		return 0, fmt.Errorf("inserting events: %w", err)
 	}
 	return inserted, nil
+}
+
+// --- UnifiedLog JSONL ---
+
+func detectUnifiedLogJSONL(path string) (string, bool, error) {
+	if strings.ToLower(filepath.Ext(path)) != ".jsonl" {
+		return "", false, nil
+	}
+	ok, err := unifiedlogparser.DetectJSONL(path)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return FormatUnifiedLogJSONL, true, nil
+}
+
+func importUnifiedLogJSONL(path string, store database.Store, p *Progress) (int, error) {
+	result, err := unifiedlogparser.ReadJSONL(path, p.reading())
+	if err != nil {
+		return 0, fmt.Errorf("reading UnifiedLog JSONL: %w", err)
+	}
+	return insertEvents(store, result.Events, p)
+}
+
+// --- UnifiedLog CSV ---
+
+func detectUnifiedLogCSV(path string) (string, bool, error) {
+	ok, err := unifiedlogparser.DetectCSV(path)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return FormatUnifiedLogCSV, true, nil
+}
+
+func importUnifiedLogCSV(path string, store database.Store, p *Progress) (int, error) {
+	result, err := unifiedlogparser.ReadCSV(path, p.reading())
+	if err != nil {
+		return 0, fmt.Errorf("reading UnifiedLog CSV: %w", err)
+	}
+	return insertEvents(store, result.Events, p)
 }
 
 // --- JSONL ---

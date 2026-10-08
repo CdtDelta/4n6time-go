@@ -324,7 +324,8 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 }
 
 // ImportFolderRecursive opens a directory chooser, then walks the selected
-// folder up to 3 levels deep importing all recognized EZ Tool CSV files.
+// folder up to 3 levels deep importing every file a recursive registry entry
+// recognizes (EZ Tools CSV, UnifiedLog CSV and JSONL).
 // If no database is open, prompts for a new SQLite file first.
 func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
 	dirPath, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{

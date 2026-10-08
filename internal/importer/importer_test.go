@@ -5,10 +5,15 @@ import (
 	"testing"
 )
 
-// TestRegistryOrder pins the detection order to the historic single-file
-// order in app.go. Dynamic CSV is a catch-all and must be last.
+// TestRegistryOrder pins the detection order. The original five entries keep
+// their historic relative order from app.go; UnifiedLog JSONL sits before
+// Plaso JSONL and UnifiedLog CSV before EZ Tools. Dynamic CSV is a catch-all
+// and must be last.
 func TestRegistryOrder(t *testing.T) {
-	want := []string{FormatJSONL, FormatTLN, FormatEZTools, FormatL2TCSV, FormatDynamicCSV}
+	want := []string{
+		FormatUnifiedLogJSONL, FormatJSONL, FormatTLN,
+		FormatUnifiedLogCSV, FormatEZTools, FormatL2TCSV, FormatDynamicCSV,
+	}
 
 	if len(Registry) != len(want) {
 		t.Fatalf("len(Registry) = %d, want %d", len(Registry), len(want))
@@ -23,13 +28,36 @@ func TestRegistryOrder(t *testing.T) {
 	}
 }
 
-// TestRegistryRecursiveFlag verifies only EZ Tools is eligible for recursive
-// folder import in this release.
+// TestRegistryRecursiveFlag verifies only EZ Tools and the two UnifiedLog
+// entries are eligible for recursive folder import. Plaso JSONL and the
+// catch-all CSV formats must stay out.
 func TestRegistryRecursiveFlag(t *testing.T) {
+	recursive := map[string]bool{
+		FormatEZTools:         true,
+		FormatUnifiedLogCSV:   true,
+		FormatUnifiedLogJSONL: true,
+	}
 	for _, f := range Registry {
-		wantRecursive := f.Name == FormatEZTools
-		if f.Recursive != wantRecursive {
-			t.Errorf("%s: Recursive = %v, want %v", f.Name, f.Recursive, wantRecursive)
+		if f.Recursive != recursive[f.Name] {
+			t.Errorf("%s: Recursive = %v, want %v", f.Name, f.Recursive, recursive[f.Name])
+		}
+	}
+}
+
+// TestRegistryFamilies verifies family assignments, and that every recursive
+// entry has one so the summary can group it.
+func TestRegistryFamilies(t *testing.T) {
+	want := map[string]string{
+		FormatEZTools:         FamilyEZTools,
+		FormatUnifiedLogCSV:   FamilyUnifiedLog,
+		FormatUnifiedLogJSONL: FamilyUnifiedLog,
+	}
+	for _, f := range Registry {
+		if f.Family != want[f.Name] {
+			t.Errorf("%s: Family = %q, want %q", f.Name, f.Family, want[f.Name])
+		}
+		if f.Recursive && f.Family == "" {
+			t.Errorf("%s: recursive entry has no Family", f.Name)
 		}
 	}
 }
@@ -52,15 +80,18 @@ func TestRegistryEntriesComplete(t *testing.T) {
 	}
 }
 
-// TestRecursiveExtensionsCSVOnly verifies the recursive extension filter is
-// derived from the registry and is currently .csv only.
-func TestRecursiveExtensionsCSVOnly(t *testing.T) {
+// TestRecursiveExtensions verifies the recursive extension filter is derived
+// from the registry: .csv from EZ Tools and UnifiedLog CSV, .jsonl from
+// UnifiedLog JSONL. Plaso's .json must not appear.
+func TestRecursiveExtensions(t *testing.T) {
 	exts := recursiveExtensions(recursiveFormats())
-	if len(exts) != 1 {
-		t.Fatalf("recursive extensions = %v, want only .csv", exts)
+	if len(exts) != 2 {
+		t.Fatalf("recursive extensions = %v, want .csv and .jsonl", exts)
 	}
-	if _, ok := exts[".csv"]; !ok {
-		t.Errorf("recursive extensions = %v, want .csv", exts)
+	for _, e := range []string{".csv", ".jsonl"} {
+		if _, ok := exts[e]; !ok {
+			t.Errorf("recursive extensions = %v, missing %s", exts, e)
+		}
 	}
 }
 
@@ -117,6 +148,12 @@ func TestDetectFileExclusiveExtensionFails(t *testing.T) {
 	f, _, err := DetectFile(path)
 	if err == nil {
 		t.Fatalf("DetectFile returned %q, want error", f.Name)
+	}
+	// With two .jsonl claimants, the error text must still be the one
+	// Plaso JSONL produced on its own.
+	const want = "invalid JSONL file: first line is not a JSON object"
+	if err.Error() != want {
+		t.Errorf("DetectFile error = %q, want %q", err.Error(), want)
 	}
 }
 

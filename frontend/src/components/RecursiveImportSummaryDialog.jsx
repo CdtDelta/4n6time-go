@@ -1,5 +1,32 @@
 import { useState } from 'react'
 
+const OTHER_FAMILY = 'Other'
+
+// groupByFamily buckets per-tool stats under their tool family, with a
+// subtotal per family. Tools without a family entry land under "Other",
+// which sorts last; families and tools otherwise sort alphabetically.
+function groupByFamily(perTool, toolFamilies) {
+  const groups = {}
+  for (const [tool, stats] of Object.entries(perTool)) {
+    const family = toolFamilies[tool] || OTHER_FAMILY
+    if (!groups[family]) {
+      groups[family] = { family, tools: [], fileCount: 0, eventCount: 0 }
+    }
+    const g = groups[family]
+    g.tools.push([tool, stats])
+    g.fileCount += stats.fileCount || 0
+    g.eventCount += stats.eventCount || 0
+  }
+  for (const g of Object.values(groups)) {
+    g.tools.sort(([a], [b]) => a.localeCompare(b))
+  }
+  return Object.values(groups).sort((a, b) => {
+    if (a.family === OTHER_FAMILY) return 1
+    if (b.family === OTHER_FAMILY) return -1
+    return a.family.localeCompare(b.family)
+  })
+}
+
 export default function RecursiveImportSummaryDialog({ visible, summary, onClose }) {
   const [skippedExpanded, setSkippedExpanded] = useState(false)
 
@@ -7,6 +34,7 @@ export default function RecursiveImportSummaryDialog({ visible, summary, onClose
 
   const perTool = summary.perTool || {}
   const skipped = summary.skippedFiles || []
+  const familyGroups = groupByFamily(perTool, summary.toolFamilies || {})
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -47,15 +75,25 @@ export default function RecursiveImportSummaryDialog({ visible, summary, onClose
                     <th>Events</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {Object.entries(perTool).map(([tool, stats]) => (
-                    <tr key={tool}>
-                      <td>{tool}</td>
-                      <td>{stats.fileCount}</td>
-                      <td>{(stats.eventCount || 0).toLocaleString()}</td>
+                {familyGroups.map(group => (
+                  <tbody key={group.family}>
+                    <tr>
+                      <td colSpan={3} style={{ fontWeight: 'bold' }}>{group.family}</td>
                     </tr>
-                  ))}
-                </tbody>
+                    {group.tools.map(([tool, stats]) => (
+                      <tr key={tool}>
+                        <td style={{ paddingLeft: '1.5em' }}>{tool}</td>
+                        <td>{stats.fileCount}</td>
+                        <td>{(stats.eventCount || 0).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                    <tr style={{ fontStyle: 'italic' }}>
+                      <td style={{ paddingLeft: '1.5em' }}>{group.family} subtotal</td>
+                      <td>{group.fileCount}</td>
+                      <td>{group.eventCount.toLocaleString()}</td>
+                    </tr>
+                  </tbody>
+                ))}
               </table>
             </div>
           )}
