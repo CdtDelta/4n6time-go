@@ -8,9 +8,10 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 
 ## Features
 
-- Import L2T CSV, Plaso JSONL, TLN, L2TTLN, dynamic CSV, and **EZ Tools CSV** files (tested with 2GB+ files, millions of events)
+- Import L2T CSV, Plaso JSONL, TLN, L2TTLN, dynamic CSV, **EZ Tools CSV**, and **macOS Unified Log** (CSV and JSONL) files (tested with 2GB+ files, millions of events)
 - **EZ Tools CSV import**: auto-detect and import output from Eric Zimmerman's tools with multi-timestamp expansion (EvtxECmd, PECmd, LECmd, JLECmd, SBECmd, MFTECmd, AmcacheParser, SrumECmd, RBCmd, WxTCmd, AppCompatCacheParser; 28 subtypes total)
-- **Import EZ Tools Folder**: batch import all CSVs from a tool output directory
+- **macOS Unified Log import**: CSV and JSONL output from Mandiant's macos-UnifiedLogs `unifiedlog_iterator`
+- **Import Folder (Recursive)**: walk a collection folder up to 3 levels deep and import every supported EZ Tools and Unified Log file, with a summary grouped by tool family and duplicate Unified Log exports skipped
 - **Tab system**: right-click any event to open a filtered view in a new tab; each tab has independent filters, search, and pagination; tab sessions persist per-database and are restored on next open
 - **SQLite and PostgreSQL** database backends (SQLite for local work, PostgreSQL for team/server deployments)
 - **Examiner notes**: add timestamped investigation notes directly into the timeline grid alongside evidence events
@@ -28,7 +29,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 - Push SQLite data to a PostgreSQL server for sharing with a team
 - Saved queries (stored in the database file)
 - Column visibility toggle (show/hide any of the 24+ columns)
-- Export filtered results to CSV
+- Export filtered results to CSV (in advanced search mode, the export matches the grid exactly)
 - 11 UI themes (Forensic Dark, Classic Dark, High Contrast, Light, Solarized, Monokai, Dracula, Nord, Gruvbox, Matrix, Forensic Blue)
 - Built-in logging system for troubleshooting (Help > Logging)
 - Built-in user guide (no internet required)
@@ -102,7 +103,7 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 ## Usage
 
 1. Launch the application
-2. Click **Import Timeline** to import a timeline file (L2T CSV, JSONL, TLN, L2TTLN, dynamic CSV, or EZ Tools CSV), or **Open** to load an existing database
+2. Click **Import Timeline** to import a timeline file (L2T CSV, JSONL, TLN, L2TTLN, dynamic CSV, EZ Tools CSV, or Unified Log CSV/JSONL), or **Open** to load an existing database
 3. Use the **Filters** panel to narrow results by source, host, type, user, or date range
 4. Click **Timeline** to visualize event distribution over time
 5. Click any row to view full event details and add tags/notes/colors
@@ -113,7 +114,7 @@ Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 
 ### Tab System
 
-Right-click any row in the event grid to open a context menu with "Search in new tab" options for key fields (host, user, source, filename, and more). Each tab maintains its own independent filters, search, and pagination — the original tab is unchanged.
+Right-click any row in the event grid to open a context menu with "Search in new tab" options for key fields (host, user, source, filename, and more). Each tab maintains its own independent filters, search, and pagination; the original tab is unchanged.
 
 - Tabs can be saved to the Saved Queries list using the save icon on the tab; loading a saved tab query reopens it in a new tab
 - When data is modified in one tab (color change, bookmark, etc.), other tabs show a stale indicator dot and can be refreshed with the refresh button
@@ -136,6 +137,8 @@ datetime BETWEEN '2025-01-01' AND '2025-06-01'
 
 Click the **?** button to see all available field names and operators. Advanced queries can be saved and loaded from the Saved Queries panel. On PostgreSQL, the reserved words `desc`, `user`, and `offset` are auto-quoted.
 
+Semicolons and SQL comments (`--`, `/*`) are not permitted in an advanced search clause and are rejected with an error before the query runs. They are allowed inside quoted string values (for example `desc LIKE '%a;b%'`). Export CSV in advanced mode exports exactly the rows shown in the grid.
+
 ### Bulk Editing
 
 Select multiple rows using shift-click (range) or ctrl/cmd-click (individual toggle). When multiple rows are selected, a bulk action bar appears with color swatches, a tag input, bookmark buttons, and an "Apply Changes" button. Select a color and/or enter a tag, then click Apply Changes to update all selected events at once. Examiner note tags are protected from bulk tag changes.
@@ -150,9 +153,41 @@ When a SQLite or PostgreSQL database is already open, importing a timeline file 
 
 **Single file:** Use the **Import Timeline** button or File > Import Timeline. EZ Tool CSVs are auto-detected alongside other supported formats.
 
-**Directory:** Use the **Import EZ Tools Folder** button on the welcome screen or File > Import EZ Tools Folder to batch import all CSV files from a tool output directory.
+**Folder:** Use **Import Folder (Recursive)** (see below) to import a whole tool output or KAPE collection folder.
 
 Supported tools: **EvtxECmd** (Windows Event Logs), **PECmd** (Prefetch), **LECmd** (LNK files), **JLECmd** (Jump Lists), **SBECmd** (ShellBags), **MFTECmd** ($MFT, $J; $Boot and $SDS recognized but skipped), **AmcacheParser** (AssociatedFileEntries, UnassociatedFileEntries, ProgramEntries, DeviceContainers, DevicePnps, DriveBinaries, DriverPackages, ShortCuts), **SrumECmd** (AppResourceUseInfo, AppTimeline, EnergyUsage, NetworkConnections, NetworkUsages, PushNotifications, vfuprov), **RBCmd** (Recycle Bin), **WxTCmd** (Activity; PackageIDs recognized but skipped), **AppCompatCacheParser** (ShimCache).
+
+### Import Folder (Recursive)
+
+Use the **Import Folder (Recursive)** button on the welcome screen or File > Import Folder (Recursive) to import every supported file in a folder tree at once.
+
+- Walks the selected folder up to 3 levels deep (the selected folder is depth 0). Symlinks are skipped.
+- Imports EZ Tools CSV files and macOS Unified Log CSV and JSONL files. Other formats, such as L2T CSV and Plaso JSONL, are imported one file at a time with **Import Timeline**.
+- The post-import summary groups per-tool file and event counts by tool family (EZ Tools, UnifiedLog) with a subtotal per family.
+- A collapsible skipped-files list shows every file that was not imported and why: unrecognized format, empty file, parse error, recognized but no timestamp columns (MFTECmd $Boot and $SDS, WxTCmd PackageIDs), or duplicate.
+- **Duplicate Unified Log exports** are imported once. A CSV and a JSONL with the same base name in one directory are duplicates, as are files whose first record matches on boot UUID, millisecond timestamp, and process UUID. The JSONL file is kept. A shared boot UUID alone does not count, since separate collections from the same boot share it.
+
+### macOS Unified Log Import
+
+4n6time imports the output of `unifiedlog_iterator` from Mandiant's [macos-UnifiedLogs](https://github.com/mandiant/macos-UnifiedLogs) project (tested with v0.7.0). Both output formats are supported and auto-detected:
+
+- **JSONL** (preferred): one JSON object per line. It is a superset of the CSV, adding message flags and the evidence path.
+- **CSV**: the iterator's CSV output, including messages that span multiple lines. Output from older versions without the `Parent Activity ID` column also imports.
+
+Field mapping:
+
+| 4n6time field | Unified Log value |
+|---|---|
+| source / sourcetype | `UNIFIEDLOG` / `macOS Unified Log` |
+| type | Event Type (Log, Activity, Signpost, Simpledump, Statedump, Loss) |
+| event_type | Log Type (Default, Info, Debug, Error, Fault, and so on) |
+| desc | Message, or Raw Message when Message is empty |
+| filename | Process |
+| source_name | Subsystem (blank when empty) |
+| user | EUID |
+| extra | full-precision timestamp, category, pid, thread_id, library, UUIDs, activity IDs, timezone, raw message; JSONL adds message flags and evidence |
+
+The datetime column is second precision, like every other format. The full-precision source timestamp is the first entry in the extra column, for sub-second ordering. The evidence path is trimmed to the part inside the `.logarchive` bundle (for example `Persist/0000000000000078.tracev3`), since the rest of the path describes the analysis machine rather than the evidence.
 
 ### PostgreSQL Support
 

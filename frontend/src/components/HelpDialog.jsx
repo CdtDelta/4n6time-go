@@ -14,7 +14,7 @@ Import Timeline: Imports a timeline file and creates a new SQLite database. Use 
 
 PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
-Import Folder (Recursive): Walks the selected folder up to 3 levels deep and imports any supported EZ Tools CSV files. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen. See the EZ Tools Import section for details.
+Import Folder (Recursive): Walks the selected folder up to 3 levels deep and imports every supported EZ Tools CSV and macOS Unified Log file. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen. See the Recursive Folder Import section for details.
 
 Supported import formats:
 - CSV: Standard log2timeline/Plaso CSV output (comma-delimited with standard forensic timeline columns)
@@ -23,6 +23,7 @@ Supported import formats:
 - L2TTLN: 7-field pipe-delimited extended timeline format
 - Dynamic CSV: Plaso default output with variable columns defined by header row
 - EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, SBECmd, MFTECmd, AmcacheParser, SrumECmd, RBCmd, WxTCmd, AppCompatCacheParser; 28 subtypes). Auto-detected when importing single files; use Import Folder (Recursive) for batch import.
+- macOS Unified Log: CSV and JSONL output from Mandiant's unifiedlog_iterator. Auto-detected when importing single files and picked up by Import Folder (Recursive). See the macOS Unified Log Import section.
 
 After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
@@ -74,6 +75,8 @@ tag LIKE '%important%'
 Field reference: Click the ? button next to the search bar to see all 30 available field names and supported operators (=, !=, LIKE, NOT LIKE, >, <, >=, <=, AND, OR, BETWEEN, IN).
 
 PostgreSQL note: When connected to a PostgreSQL database, the columns desc, user, and offset are SQL reserved words. These are automatically double-quoted before execution, so you can use them as-is in your queries.
+
+Not permitted: Semicolons and SQL comments (-- and /*) are rejected with an error before the query runs, on both SQLite and PostgreSQL. A WHERE clause never needs them. They are allowed inside quoted string values, so desc LIKE '%a;b%' works.
 
 Saving advanced queries: Click the Save button (floppy disk icon) to save the current SQL query with a name. Saved advanced queries appear in the Saved Queries panel with a "SQL:" prefix. Loading a saved advanced query automatically switches to SQL mode.
 
@@ -183,7 +186,7 @@ Deleting notes: Select an examiner note in the grid to open it in the detail pan
 
 Color coding and bookmarks: You can assign a color to an examiner note using the color picker in the detail panel, and toggle its bookmark star. Colors and bookmarks work the same as for evidence events.
 
-Filtering: Use the source filter with value "EXAMINER" to show only examiner notes, or use advanced search with source = 'EXAMINER'. When filtering by a different source (e.g., source = 'FILE'), examiner notes are automatically excluded from results.`
+Filtering: Use the source filter with value "EXAMINER" to show only examiner notes, or use advanced search with source = 'EXAMINER'. When filtering by a different source (e.g., source = 'FILE'), examiner notes are automatically excluded from results. In advanced search, source conditions written with IN or LIKE also exclude examiner notes; write source = 'EXAMINER' to include them.`
   },
   {
     id: 'bulk-editing',
@@ -225,6 +228,8 @@ Note: There is no undo for an import. If you import the wrong file, you would ne
     content: `Export your current view to a CSV file using File > Export CSV or the Export CSV button in the toolbar.
 
 The export respects your current filters, search, date range, and bookmark-only filter. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
+
+In advanced search (SQL) mode, the export contains exactly the rows shown in the grid: the same WHERE clause, the same tab base query, and the same examiner notes.
 
 You will be prompted to choose a filename and location for the exported CSV file.`
   },
@@ -304,7 +309,7 @@ These skipped files appear in the recursive import summary dialog with the reaso
 
 Single file import: Use the normal Import Timeline button (or File > Import Timeline). EZ Tool CSVs are auto-detected from their column headers. No special steps are needed.
 
-Recursive folder import: Use the Import Folder (Recursive) button on the welcome screen (or File > Import Folder (Recursive)) to batch import supported EZ Tool CSV files from a folder tree. The import walks up to 3 levels below the selected folder (root = depth 0), auto-detects each CSV, and reports a per-tool breakdown plus any skipped files. Non-CSV files and unrecognized CSVs are silently skipped or listed with a reason.
+Recursive folder import: Use the Import Folder (Recursive) button on the welcome screen (or File > Import Folder (Recursive)) to batch import supported EZ Tool CSV files from a folder tree. See the Recursive Folder Import section for details.
 
 Multi-timestamp expansion: Each row in an EZ Tool CSV may contain multiple timestamp columns (e.g., Created, Modified, Accessed). Each non-empty timestamp becomes a separate timeline event. This gives you a complete picture of all temporal activity associated with each artifact.
 
@@ -313,6 +318,36 @@ Source identification: The source column identifies which tool produced the data
 Type column: The type column shows which timestamp field each event represents. Examples: TimeCreated, LastRun, Created0x10, TargetModified, FirstInteracted, StartTime, DeletedOn. This tells you exactly what activity the timestamp records.
 
 Database compatibility: EZ Tool imports work with both SQLite and PostgreSQL databases. You can import EZ Tool data into an existing database to combine it with other evidence sources like Plaso timelines, creating a unified investigation timeline.`
+  },
+  {
+    id: 'recursive-import',
+    title: 'Recursive Folder Import',
+    content: `Import Folder (Recursive) imports every supported file in a folder tree at once, such as a KAPE collection or a folder of tool output. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen.
+
+What it imports: EZ Tools CSV files and macOS Unified Log CSV and JSONL files. Other formats (L2T CSV, Plaso JSONL, TLN, dynamic CSV) are imported one file at a time with Import Timeline.
+
+Depth: The import walks up to 3 levels below the selected folder (the selected folder is depth 0). Symlinks are not followed.
+
+Summary: When the import finishes, a summary dialog shows the total events imported and a per-tool breakdown grouped by tool family (EZ Tools, UnifiedLog), with a subtotal for each family. Tools without a family appear under Other.
+
+Skipped files: Expand the skipped files list to see every file that was not imported and the reason: unrecognized format, empty file, parse error, recognized but no timestamp columns (MFTECmd $Boot and $SDS, WxTCmd PackageIDs), or duplicate.
+
+Duplicate Unified Log exports: A collection often holds both the CSV and JSONL output of the same unifiedlog_iterator run. Importing both would double every event, so duplicates are imported once. A CSV and a JSONL with the same base name in one directory are duplicates, as are files whose first record has the same boot UUID, timestamp (to the millisecond), and process UUID. The JSONL file is kept because it carries everything the CSV does plus message flags and evidence. Skipped copies are listed as "duplicate of <file> (same UnifiedLog data)". Files that only share a boot UUID are not duplicates, since separate collections from the same boot share it.`
+  },
+  {
+    id: 'unifiedlog-import',
+    title: 'macOS Unified Log Import',
+    content: `4n6time imports the output of unifiedlog_iterator from Mandiant's macos-UnifiedLogs project (tested with v0.7.0). It parses a macOS .logarchive (or a live system's logs) into CSV or JSONL. Both formats are auto-detected on single-file import and picked up by Import Folder (Recursive).
+
+JSONL or CSV: Prefer JSONL. It contains everything in the CSV plus message flags and the evidence path. The CSV handles messages that span multiple lines, and output from older versions without the Parent Activity ID column also imports.
+
+Field mapping: Every event has source UNIFIEDLOG and source type "macOS Unified Log". Type holds the Event Type (Log, Activity, Signpost, Simpledump, Statedump, Loss) and Event Type holds the Log Type (Default, Info, Debug, Error, Fault, and so on). Description holds the Message, or the Raw Message when Message is empty. Filename holds the Process, Source Name holds the Subsystem (blank when the record has none), and User holds the EUID.
+
+Extra column: The extra column starts with the full-precision source timestamp, followed by category, pid, thread_id, library, library_uuid, activity IDs, process_uuid, boot_uuid, timezone, and raw_message. JSONL imports also include message_flags and evidence. The evidence path is trimmed to the part inside the .logarchive bundle (for example Persist/0000000000000078.tracev3), since the rest of the path describes the analysis machine.
+
+Timestamps: The datetime column is second precision, the same as every other format. Use the timestamp entry in the extra column when you need sub-second ordering.
+
+Skipped records: Records with no usable timestamp are skipped during import.`
   },
   {
     id: 'data-formats',
@@ -329,11 +364,13 @@ L2TTLN (Extended Timeline): A 7-field pipe-delimited extension of TLN adding Tim
 
 Dynamic CSV: Plaso's default output format with variable columns defined by the header row. Default fields are datetime, timestamp_desc, source, source_long, message, parser, display_name, and tag. Custom fields added via Plaso's --fields and --additional_fields options are automatically mapped where possible, with unrecognized fields collected into the Extra column. Generated by Plaso with "psort -o dynamic".
 
+macOS Unified Log: CSV and JSONL output from Mandiant's unifiedlog_iterator. Recognized by its column names (CSV) or by the boot_uuid, event_type, log_type, and process keys (JSONL). See the macOS Unified Log Import section.
+
 MACB Notation: Timestamps are categorized using MACB notation where M = Modified, A = Accessed, C = Changed (metadata), B = Born (created). These map from the timestamp_desc field in Plaso output.
 
 EZ Tools CSV: Output from Eric Zimmerman's forensic tools. Each tool produces CSVs with tool-specific columns. Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists, both Automatic and Custom), AmcacheParser (multiple sub-types: Unassociated Files, Device Containers, Device PnPs, Drive Binaries, Driver Packages, ShortCuts), SrumECmd (App Timeline, Energy Usage, Network Connections, Network Usages, Push Notifications, VFU Provider), MFTECmd (NTFS MFT), and SBECmd (ShellBags). Each timestamp column in the source CSV becomes a separate timeline event with appropriate MACB notation.
 
-Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with .jsonl extension are treated as JSONL, .tln as TLN. For .csv and .txt files, the parser tries TLN first (pipe-delimited), then EZ Tools CSV (recognized by tool-specific column signatures), then L2T CSV (fixed 17 columns), then dynamic CSV (header-based).`
+Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with the .jsonl extension are checked as Unified Log JSONL first, then Plaso JSONL; .json files as Plaso JSONL; .tln and .l2ttln files as TLN. For .csv, .txt, and other files, the parser tries TLN first (pipe-delimited), then Unified Log CSV, then EZ Tools CSV (recognized by tool-specific column signatures), then L2T CSV (fixed 17 columns), then dynamic CSV (header-based).`
   }
 ]
 

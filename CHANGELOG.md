@@ -2,6 +2,39 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.15.0 (2026-10-07)
+
+### New parsers
+
+- **macOS Unified Log** (Mandiant macos-UnifiedLogs `unifiedlog_iterator`, tested with v0.7.0): CSV and JSONL output, auto-detected on single-file import and picked up by recursive folder import. Events import with source UNIFIEDLOG and sourcetype "macOS Unified Log". Event Type maps to type, Log Type to event_type, Message to desc (falling back to Raw Message when empty), Process to filename, Subsystem to source_name, and EUID to user. All event types are imported, including Activity, Signpost, Simpledump, Statedump, and Loss records. The datetime column is second precision like other formats; the full-precision source timestamp is the first entry in the extra column. JSONL also carries message flags and the evidence path (trimmed to the part inside the `.logarchive`). Very large statedump records and activity IDs beyond the signed 64-bit range import correctly.
+
+### Improvements
+
+- **Recursive import summary grouped by tool family**: the post-import dialog groups per-tool counts under family headings (EZ Tools, UnifiedLog) with a subtotal for each family. Tools without a family appear under "Other".
+- **Duplicate Unified Log outputs skipped**: when a folder holds more than one export of the same Unified Log data, recursive import imports it once. A CSV and JSONL with the same base name in one directory are duplicates, as are files whose first record matches on boot UUID, timestamp (to the millisecond), and process UUID. The JSONL file is kept because it carries every CSV field plus message flags and evidence. Skipped copies appear in the skipped-files list as "duplicate of <file> (same UnifiedLog data)". A shared boot UUID alone does not mark files as duplicates, since separate collections from the same boot share it.
+- **Plaso JSONL with a UTF-8 BOM**: files starting with a byte order mark now validate and import. Previously they failed validation with "first line is not a JSON object".
+- Plaso JSONL files found during recursive import are listed as skipped; recursive import continues to cover EZ Tools and Unified Log output only.
+
+### Security
+
+- **Advanced search rejects semicolons and SQL comments**: an advanced search WHERE clause containing an unquoted semicolon, `--`, or `/*` is now rejected with an error before it runs, on both SQLite and PostgreSQL. Semicolons and comment markers inside quoted string values are still allowed. This applies to the grid, the result count, the histogram, and CSV export. **Behavior change:** clauses that previously ran with a trailing comment or semicolon must be rewritten without them.
+- Settings, the logging configuration, log files, and exported CSV files are now written readable only by the current user (0600).
+- PostgreSQL connection strings in log lines and the UI header show `user@host` with no password or password placeholder.
+- Pivot (base query) values used by advanced-mode export are validated against the known field list and the `=` and `LIKE` operators.
+
+### Bug fixes
+
+- **Export CSV in advanced search mode** now exports exactly the rows shown in the grid, including the tab's base query and examiner notes handling. Previously the export ran the WHERE clause as a keyword search, producing a different row set.
+- **Examiner notes in advanced search**: clauses that combine source conditions are resolved in a fixed order, so `source = 'FILE' AND source != 'REGISTRY'` no longer includes examiner notes. **Behavior change:** source filters using `IN` or `LIKE` (for example `source IN ('EXAMINER','FILE')`) now exclude examiner notes; previously they included them. Use `source = 'EXAMINER'` to include notes explicitly.
+
+### Internal
+
+- New import format registry (`internal/importer`): single-file and recursive import share one ordered list of formats, each with detection, import, extension, recursive-eligibility, and tool-family settings. Recursive import moved from `internal/eztoolparser` to `internal/importer`.
+- New `internal/unifiedlogparser` and `internal/textutil` (shared UTF-8 BOM-stripping reader) packages.
+- Advanced search grid and export share one query builder, so they cannot drift.
+- First app-level integration tests (`app_test.go`) covering advanced search validation and export parity on SQLite.
+- CI pins the Wails CLI to v2.12.0.
+
 ## v0.14.1 (2026-06-15)
 
 ### Security
