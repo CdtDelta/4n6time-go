@@ -1552,15 +1552,18 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 		"phase": "reading", "message": fmt.Sprintf("Reading %d events from SQLite...", sourceCount), "count": 0, "total": sourceCount,
 	})
 
-	q := query.New(999999999) // effectively unlimited, matches ExportCSV pattern
-	q.SetDialect(query.DefaultDialect)
-	q.OrderBy("datetime")
-	q.SetPage(1)
-	sqlStr, args := q.Build()
+	sqlStr, args := buildPushReadQuery()
 
 	events, err := a.store.ExecuteQuery(sqlStr, args, nil)
 	if err != nil {
 		return "", fmt.Errorf("reading events from SQLite: %w", err)
+	}
+
+	// Examiner notes must not reach log2timeline. The read above excludes them;
+	// this catches any that slip through, and the notes copy below handles them.
+	events, droppedNotes := evidenceOnly(events)
+	if droppedNotes > 0 {
+		a.logError(fmt.Sprintf("Push: dropped %d examiner note rows from the evidence read; notes are copied to examiner_notes separately", droppedNotes))
 	}
 
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
@@ -1635,6 +1638,41 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 		msg += fmt.Sprintf(" (%d examiner notes)", notesInserted)
 	}
 	return msg, nil
+}
+
+// buildPushReadQuery builds the SQLite read that PushToPostgres copies into
+// PostgreSQL log2timeline. The /* no-notes */ marker keeps the examiner notes
+// UNION out of the read. Notes are copied to examiner_notes separately, and
+// copying them here would store each one as an editable evidence row.
+func buildPushReadQuery() (string, []interface{}) {
+	q := query.New(999999999) // effectively unlimited, matches ExportCSV pattern
+	q.SetDialect(query.DefaultDialect)
+	q.OrderBy("datetime")
+	q.SetPage(1)
+	sqlStr, args := q.Build()
+	return "/* no-notes */ " + sqlStr, args
+}
+
+// evidenceOnly returns the events that are evidence rows (positive IDs) and
+// the number of examiner note rows (negative IDs) it dropped. The input slice
+// is not modified. An all-evidence input comes back unchanged.
+func evidenceOnly(events []*model.Event) ([]*model.Event, int) {
+	dropped := 0
+	for _, e := range events {
+		if e.ID < 0 {
+			dropped++
+		}
+	}
+	if dropped == 0 {
+		return events, 0
+	}
+	out := make([]*model.Event, 0, len(events)-dropped)
+	for _, e := range events {
+		if e.ID >= 0 {
+			out = append(out, e)
+		}
+	}
+	return out, dropped
 }
 
 // -- Tab Settings --
