@@ -19,7 +19,8 @@ var l2tHeader = []string{
 	"filename", "inode", "notes", "format", "extra",
 }
 
-// Export header for writing events back to CSV.
+// exportHeader is the export column list. ExportRow fills the same columns in
+// the same order.
 var exportHeader = []string{
 	"datetime", "timezone", "MACB", "source", "sourcetype", "type",
 	"user", "host", "desc", "filename", "inode", "notes", "format",
@@ -123,6 +124,41 @@ func ReadEvents(path string, dateFrom, dateTo string, limit int, onProgress func
 	return result, nil
 }
 
+// ExportHeader returns the export column names in order. The slice is a copy,
+// so callers may append to it.
+func ExportHeader() []string {
+	return append([]string(nil), exportHeader...)
+}
+
+// ExportRow returns the export values for e, one per ExportHeader column.
+func ExportRow(e *model.Event) []string {
+	return []string{
+		e.Datetime,
+		e.Timezone,
+		e.MACB,
+		e.Source,
+		e.SourceType,
+		e.Type,
+		e.User,
+		e.Host,
+		e.Desc,
+		e.Filename,
+		e.Inode,
+		e.Notes,
+		e.Format,
+		e.Extra,
+		e.ReportNotes,
+		e.InReport,
+		e.Tag,
+		e.Color,
+		fmt.Sprintf("%d", e.Offset),
+		fmt.Sprintf("%d", e.StoreNumber),
+		fmt.Sprintf("%d", e.StoreIndex),
+		fmt.Sprintf("%d", e.VSSStoreNumber),
+		fmt.Sprintf("%d", e.Bookmark),
+	}
+}
+
 // WriteEvents writes events to a CSV file in 4n6time export format.
 func WriteEvents(path string, events []*model.Event) error {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
@@ -135,36 +171,12 @@ func WriteEvents(path string, events []*model.Event) error {
 	defer writer.Flush()
 
 	// Write header
-	if err := writer.Write(exportHeader); err != nil {
+	if err := writer.Write(ExportHeader()); err != nil {
 		return fmt.Errorf("writing header: %w", err)
 	}
 
 	for _, e := range events {
-		row := []string{
-			e.Datetime,
-			e.Timezone,
-			e.MACB,
-			e.Source,
-			e.SourceType,
-			e.Type,
-			e.User,
-			e.Host,
-			e.Desc,
-			e.Filename,
-			e.Inode,
-			e.Notes,
-			e.Format,
-			e.Extra,
-			e.ReportNotes,
-			e.InReport,
-			e.Tag,
-			e.Color,
-			fmt.Sprintf("%d", e.Offset),
-			fmt.Sprintf("%d", e.StoreNumber),
-			fmt.Sprintf("%d", e.StoreIndex),
-			fmt.Sprintf("%d", e.VSSStoreNumber),
-			fmt.Sprintf("%d", e.Bookmark),
-		}
+		row := ExportRow(e)
 		if err := writer.Write(row); err != nil {
 			return fmt.Errorf("writing row: %w", err)
 		}

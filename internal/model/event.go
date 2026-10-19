@@ -9,6 +9,7 @@ var Fields = []string{
 	"tag", "color", "offset", "store_number", "store_index",
 	"vss_store_number", "URL", "record_number", "event_identifier",
 	"event_type", "source_name", "user_sid", "computer_name", "bookmark",
+	"import_id",
 }
 
 // Event represents a single timeline event from a Plaso/log2timeline output.
@@ -45,4 +46,24 @@ type Event struct {
 	UserSID        string `json:"user_sid" db:"user_sid"`
 	ComputerName   string `json:"computer_name" db:"computer_name"`
 	Bookmark       int64  `json:"bookmark" db:"bookmark"`
+	ImportID       int64  `json:"import_id" db:"import_id"` // 0 = no import (pre-provenance or unattributed)
+}
+
+// Import status values stored in l2t_imports.status. The strings are part of
+// the on-disk format and must not change.
+const (
+	ImportStatusInProgress = "in_progress"
+	ImportStatusComplete   = "complete"
+	ImportStatusFailed     = "failed"
+)
+
+// ImportRecord describes one import run stored in the l2t_imports table.
+type ImportRecord struct {
+	ID         int64  `json:"id"`
+	Filename   string `json:"filename"`
+	Label      string `json:"label"`
+	Format     string `json:"format"`
+	ImportedAt string `json:"imported_at"`
+	EventCount int64  `json:"event_count"`
+	Status     string `json:"status"`
 }

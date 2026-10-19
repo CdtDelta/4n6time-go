@@ -115,7 +115,7 @@ func TestImportFolderRecursiveGenericCSVSkipped(t *testing.T) {
 	}
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}

@@ -63,7 +63,8 @@ func (d *PostgresDialect) CreateTableSQL() string {
 		store_index INT, vss_store_number INT, URL TEXT,
 		record_number TEXT, event_identifier TEXT, event_type TEXT,
 		source_name TEXT, user_sid TEXT, computer_name TEXT,
-		bookmark INT DEFAULT 0
+		bookmark INT DEFAULT 0,
+		import_id INT
 	)`
 }
 
@@ -107,8 +108,8 @@ func (d *PostgresDialect) InsertEventSQL() string {
 		timezone, MACB, source, sourcetype, type, "user", host, "desc", filename,
 		inode, notes, format, extra, datetime, reportnotes, inreport, tag, color,
 		"offset", store_number, store_index, vss_store_number, URL, record_number,
-		event_identifier, event_type, source_name, user_sid, computer_name, bookmark
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)`
+		event_identifier, event_type, source_name, user_sid, computer_name, bookmark, import_id
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)`
 }
 
 func (d *PostgresDialect) CreateExaminerNotesTableSQL() string {
@@ -132,4 +133,20 @@ func (d *PostgresDialect) CreateTabSessionsTableSQL() string {
 		id SERIAL PRIMARY KEY,
 		session_data TEXT
 	)`
+}
+
+func (d *PostgresDialect) CreateImportsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_imports (
+		id SERIAL PRIMARY KEY,
+		filename TEXT,
+		label TEXT,
+		format TEXT,
+		imported_at TIMESTAMP,
+		event_count INT DEFAULT 0,
+		status TEXT
+	)`
+}
+
+func (d *PostgresDialect) InsertImportSQL() string {
+	return `INSERT INTO l2t_imports (filename, label, format, imported_at, event_count, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
 }

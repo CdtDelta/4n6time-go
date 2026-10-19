@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/cdtdelta/4n6time/internal/importer"
 	"github.com/cdtdelta/4n6time/internal/model"
@@ -196,9 +195,10 @@ func (a *App) OpenDatabase() (*DBInfo, error) {
 	return a.loadDatabase(path)
 }
 
-// ImportCSV opens a file dialog for a CSV or JSONL file, creates a new database, and imports events.
-func (a *App) ImportCSV() (*DBInfo, error) {
-	csvPath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+// SelectImportFile opens the file dialog for a timeline file to import and
+// returns the chosen path, or "" if the user cancelled.
+func (a *App) SelectImportFile() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Import Timeline File",
 		Filters: []runtime.FileFilter{
 			{DisplayName: "Timeline Files (*.csv, *.jsonl, *.tln, *.l2ttln, *.txt)", Pattern: "*.csv;*.jsonl;*.tln;*.l2ttln;*.txt"},
@@ -208,15 +208,36 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 			{DisplayName: "All Files (*.*)", Pattern: "*.*"},
 		},
 	})
-	if err != nil {
-		return nil, err
+}
+
+// SelectImportFolder opens the folder chooser for a recursive import and
+// returns the chosen path, or "" if the user cancelled.
+func (a *App) SelectImportFolder() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select Folder to Import",
+	})
+}
+
+// emit sends a Wails event. Without a runtime context (tests, or before startup)
+// it does nothing, so the import methods can run headless.
+func (a *App) emit(name string, data map[string]interface{}) {
+	if a.ctx == nil {
+		return
 	}
+	runtime.EventsEmit(a.ctx, name, data)
+}
+
+// ImportCSV imports the timeline file at csvPath, creating a new database if
+// none is open, and imports the events. csvPath comes from SelectImportFile.
+// label is an optional examiner-supplied name (for example a hostname) stored
+// on the import record; it may be empty. An empty csvPath cancels the import.
+func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 	if csvPath == "" {
 		return nil, nil
 	}
 
 	// The registry defines detection order; the first matching format wins.
-	format, _, err := importer.DetectFile(csvPath)
+	format, formatLabel, err := importer.DetectFile(csvPath)
 	if err != nil {
 		return nil, err
 	}
@@ -260,28 +281,28 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		store = a.store
 	}
 
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase": "reading", "message": "Reading " + formatName + " file...", "count": 0, "total": 0,
 	})
 
 	progress := &importer.Progress{
 		Reading: func(count int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			a.emit("import:progress", map[string]interface{}{
 				"phase": "reading", "message": fmt.Sprintf("Read %d events...", count), "count": count, "total": 0,
 			})
 		},
 		Status: func(message string, count int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			a.emit("import:progress", map[string]interface{}{
 				"phase": "reading", "message": message, "count": count, "total": 0,
 			})
 		},
 		InsertStart: func(total int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			a.emit("import:progress", map[string]interface{}{
 				"phase": "inserting", "message": "Inserting into database...", "count": 0, "total": total,
 			})
 		},
 		Inserting: func(count, total int) {
-			runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+			a.emit("import:progress", map[string]interface{}{
 				"phase": "inserting", "message": fmt.Sprintf("Inserted %d of %d events...", count, total), "count": count, "total": total,
 			})
 		},
@@ -294,15 +315,17 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		}
 	}
 
-	// Import wraps its errors with "reading <format>:" or "inserting events:".
-	total, err := format.Import(csvPath, store, progress)
+	// ImportFile records the import, stamps its events, and finalizes the record.
+	// The import error text is the same one Format.Import produces.
+	res, err := importer.ImportFile(csvPath, format, formatLabel, label, store, progress, a.logWrite)
 	if err != nil {
 		closeOnError()
 		return nil, err
 	}
+	total := res.Count
 
 	// Update metadata tables
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase": "metadata", "message": "Building metadata and indexes...", "count": 0, "total": 0,
 	})
 	if err := store.UpdateMetadata(); err != nil {
@@ -315,7 +338,7 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 		a.store = store
 		a.driver = "sqlite"
 	}
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase": "done", "message": fmt.Sprintf("Import complete: %d events", total), "count": total, "total": total,
 	})
 	a.logInfo(fmt.Sprintf("Import complete: %d %s events in %s", total, formatName, time.Since(importStart).Round(time.Millisecond)))
@@ -323,17 +346,12 @@ func (a *App) ImportCSV() (*DBInfo, error) {
 	return a.getDBInfo()
 }
 
-// ImportFolderRecursive opens a directory chooser, then walks the selected
-// folder up to 3 levels deep importing every file a recursive registry entry
-// recognizes (EZ Tools CSV, UnifiedLog CSV and JSONL).
-// If no database is open, prompts for a new SQLite file first.
-func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
-	dirPath, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "Select Folder to Import",
-	})
-	if err != nil {
-		return nil, err
-	}
+// ImportFolderRecursive walks dirPath, the folder chosen in SelectImportFolder,
+// up to 3 levels deep, importing every file a recursive registry entry
+// recognizes (EZ Tools CSV, UnifiedLog CSV and JSONL). label is applied to
+// every import record created in the walk; it may be empty. An empty dirPath
+// cancels the import. If no database is open, prompts for a new SQLite file.
+func (a *App) ImportFolderRecursive(dirPath, label string) (*importer.ImportSummary, error) {
 	if dirPath == "" {
 		return nil, nil // user cancelled
 	}
@@ -378,12 +396,12 @@ func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
 		}
 	}
 
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase": "reading", "message": "Scanning folder tree...", "count": 0, "total": 0,
 	})
 
 	progressCallback := func(relPath string, count int) {
-		runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+		a.emit("import:progress", map[string]interface{}{
 			"phase":   "reading",
 			"message": fmt.Sprintf("Imported %s (%d events)", relPath, count),
 			"count":   count,
@@ -391,13 +409,13 @@ func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
 		})
 	}
 
-	summary, err := importer.ImportFolderRecursive(dirPath, store, progressCallback)
+	summary, err := importer.ImportFolderRecursive(dirPath, store, label, a.logWrite, progressCallback)
 	if err != nil {
 		closeOnError()
 		return nil, fmt.Errorf("recursive folder import: %w", err)
 	}
 
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase": "metadata", "message": "Building metadata and indexes...", "count": 0, "total": 0,
 	})
 	if err := store.UpdateMetadata(); err != nil {
@@ -411,7 +429,7 @@ func (a *App) ImportFolderRecursive() (*importer.ImportSummary, error) {
 		a.driver = "sqlite"
 	}
 
-	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
+	a.emit("import:progress", map[string]interface{}{
 		"phase":   "done",
 		"message": fmt.Sprintf("Import complete: %d events from %d files", summary.TotalEvents, summary.TotalFilesProcessed),
 		"count":   summary.TotalEvents,
@@ -433,6 +451,28 @@ func (a *App) GetCurrentDBInfo() (*DBInfo, error) {
 }
 
 // -- Query Operations --
+
+// basePredicate builds the tab base query predicate for req, or nil when the
+// request has no base. The grid and the simple-mode export both use it, so a
+// tab shows the same rows whichever one produces them.
+func basePredicate(req QueryRequest) (*query.Predicate, error) {
+	if req.BaseField == "" {
+		return nil, nil
+	}
+	if req.BaseField == importIDField {
+		return importIDPredicate(baseOperator(req.BaseOp), req.BaseValue)
+	}
+	var op query.Operator
+	switch req.BaseOp {
+	case "=":
+		op = query.Equal
+	case "LIKE":
+		op = query.Like
+	default:
+		op = query.Equal
+	}
+	return query.Simple(req.BaseField, op, req.BaseValue), nil
+}
 
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
@@ -485,6 +525,14 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 
 	// Add filters
 	for _, f := range req.Filters {
+		if f.Field == importIDField {
+			p, err := importIDPredicate(f.Operator, f.Value)
+			if err != nil {
+				return nil, err
+			}
+			q.AddPredicate(p)
+			continue
+		}
 		// Handle date range comparisons directly via SQL
 		// since the query builder's Simple predicate handles these
 		var op query.Operator
@@ -539,43 +587,12 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		q.AddPredicate(p)
 	}
 
-	// Tab base query: always ANDed with all other filters
-	if req.BaseField != "" {
-		var baseOp query.Operator
-		switch req.BaseOp {
-		case "=":
-			baseOp = query.Equal
-		case "LIKE":
-			baseOp = query.Like
-		default:
-			baseOp = query.Equal
-		}
-		if p := query.Simple(req.BaseField, baseOp, req.BaseValue); p != nil {
-			q.AddPredicate(p)
-		}
+	// Tab base query: ANDed with the whole filter set, outside its AND/OR logic.
+	base, err := basePredicate(req)
+	if err != nil {
+		return nil, err
 	}
-
-	// Determine whether to exclude examiner notes from the UNION. Notes only have
-	// meaningful data for: source, datetime, tag, color, bookmark, desc.
-	// Any filter on a field NOT in this set means notes can't satisfy it, so skip them.
-	// (sourcetype is excluded from the "compatible" set because any sourcetype filter
-	// targets specific evidence subtypes, not examiner notes.)
-	examinerCompatibleFields := map[string]bool{
-		"source": true, "datetime": true, "tag": true,
-		"color": true, "bookmark": true, "desc": true,
-	}
-	excludeNotes := false
-	if req.BaseField != "" && !examinerCompatibleFields[req.BaseField] {
-		excludeNotes = true
-	}
-	if !excludeNotes {
-		for _, f := range req.Filters {
-			if !examinerCompatibleFields[f.Field] {
-				excludeNotes = true
-				break
-			}
-		}
-	}
+	q.SetBase(base)
 
 	// Order by
 	if req.OrderBy != "" {
@@ -593,19 +610,14 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	sqlStr, args := q.Build()
 	countSQL, countArgs := q.BuildCount()
 
+	// Examiner notes: simpleNotesPlan decides whether notes can appear and which
+	// condition selects them. The simple-mode export uses the same plan.
+	excludeNotes, notesFilter := simpleNotesPlan(req, d, len(args)+1)
+
 	// Inject hint so wrapWithExaminerNotesUnion skips the UNION.
 	if excludeNotes {
 		sqlStr = "/* no-notes */ " + sqlStr
 		countSQL = "/* no-notes */ " + countSQL
-	}
-
-	// Build the notes-side filter for the UNION ALL. When excludeNotes is false,
-	// compatible filters (datetime, bookmark, tag, color, desc) are applied to the
-	// examiner_notes SELECT so notes that don't satisfy those conditions are excluded.
-	// startIdx follows the last main-query placeholder so PostgreSQL $N numbering is correct.
-	var notesFilter *database.NotesFilter
-	if !excludeNotes {
-		notesFilter = buildNotesFilter(req, d, len(args)+1)
 	}
 
 	// Get total count (ignore error to preserve existing behavior: count stays 0 on failure)
@@ -700,6 +712,13 @@ func advancedClauseWithBase(clause, baseField, baseOp, baseValue string) (string
 	}
 	if !isValidModelField(baseField) {
 		return "", fmt.Errorf("invalid base field: %s", baseField)
+	}
+	if baseField == importIDField {
+		n, err := importIDValue(baseOperator(baseOp), baseValue)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s = %d AND (%s)", importIDField, n, clause), nil
 	}
 	if baseOp != "=" && baseOp != "LIKE" {
 		return "", fmt.Errorf("invalid base operator: %s", baseOp)
@@ -866,7 +885,11 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 		// examiner notes UNION from the SQL text alone.
 		sqlStr, args = rq.Build()
 	} else {
-		sqlStr, args, notesFilter = a.buildSimpleExportQuery(req)
+		var err error
+		sqlStr, args, notesFilter, err = a.buildSimpleExportQuery(req)
+		if err != nil {
+			return "", err
+		}
 	}
 
 	status("Querying events...")
@@ -878,7 +901,12 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 
 	status(fmt.Sprintf("Writing %d events to CSV...", len(events)))
 
-	if err := csvparser.WriteEvents(savePath, events); err != nil {
+	// Resolve import filenames once so each row can name its source file.
+	importFiles, err := a.importFileNames()
+	if err != nil {
+		return "", err
+	}
+	if err := writeExportCSV(savePath, events, importFiles); err != nil {
 		return "", fmt.Errorf("writing CSV: %w", err)
 	}
 
@@ -891,16 +919,31 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 // buildSimpleExportQuery builds the keyword/filter export query and its
 // examiner notes filter. Behavior is unchanged from the original inline
 // ExportCSV construction.
-func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, *database.NotesFilter) {
+func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, *database.NotesFilter, error) {
 	// Build query without pagination to get all matching events
 	q := query.New(exportPageSize)
 	q.SetDialect(a.queryDialect())
+
+	// Tab base query, applied exactly as QueryEvents applies it.
+	base, err := basePredicate(req)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	q.SetBase(base)
 
 	if req.Logic == "OR" {
 		q.SetLogic(query.OR)
 	}
 
 	for _, f := range req.Filters {
+		if f.Field == importIDField {
+			p, err := importIDPredicate(f.Operator, f.Value)
+			if err != nil {
+				return "", nil, nil, err
+			}
+			q.AddPredicate(p)
+			continue
+		}
 		var op query.Operator
 		switch f.Operator {
 		case "=":
@@ -961,27 +1004,12 @@ func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, *
 
 	sqlStr, args := q.Build()
 
-	// Determine whether to exclude examiner notes from the export, using the same
-	// compatible-field logic as QueryEvents.
-	exportExaminerCompatible := map[string]bool{
-		"source": true, "datetime": true, "tag": true,
-		"color": true, "bookmark": true, "desc": true,
-	}
-	excludeExportNotes := false
-	for _, f := range req.Filters {
-		if !exportExaminerCompatible[f.Field] {
-			excludeExportNotes = true
-			break
-		}
-	}
+	// Examiner notes: the same plan as the grid, so the export matches it.
+	excludeExportNotes, exportNotesFilter := simpleNotesPlan(req, a.queryDialect(), len(args)+1)
 	if excludeExportNotes {
 		sqlStr = "/* no-notes */ " + sqlStr
 	}
-	var exportNotesFilter *database.NotesFilter
-	if !excludeExportNotes {
-		exportNotesFilter = buildNotesFilter(req, a.queryDialect(), len(args)+1)
-	}
-	return sqlStr, args, exportNotesFilter
+	return sqlStr, args, exportNotesFilter, nil
 }
 
 // -- Metadata Operations --
@@ -991,81 +1019,38 @@ func (a *App) GetDistinctValues(field string) (map[string]int64, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
+	if field == importIDField {
+		return a.store.GetDistinctValuesFiltered(field, importIDNotNull, nil)
+	}
 	return a.store.GetDistinctValues(field)
+}
+
+// buildNotesFilter returns the examiner notes condition for req, or nil when no
+// condition applies. It is simpleNotesPlan without the exclusion flag; code
+// that needs to know whether notes are excluded calls simpleNotesPlan.
+func buildNotesFilter(req QueryRequest, d query.QueryDialect, startIdx int) *database.NotesFilter {
+	_, notes := simpleNotesPlan(req, d, startIdx)
+	return notes
 }
 
 // buildBaseWhere constructs the WHERE clause and argument for a single base query predicate.
 // Mirrors query.Simple: LIKE and NOT LIKE operators wrap the value with % wildcards so that
 // GetFilteredDistinctValues and GetFilteredMinMaxDate match exactly what QueryEvents produces.
-// buildNotesFilter constructs the WHERE clause and parameter values for the
-// examiner_notes side of the UNION ALL in ExecuteQuery/ExecuteCountQuery.
-// Only filters that map to columns in examiner_notes are included; incompatible
-// fields are silently skipped (the caller's excludeNotes detection ensures notes
-// are omitted entirely when a filter references a field notes cannot satisfy).
-//
-// startIdx is the 1-based placeholder index to begin at, which must equal
-// len(mainQueryArgs)+1 so that PostgreSQL $N numbers do not collide with the
-// main query placeholders.
-func buildNotesFilter(req QueryRequest, d query.QueryDialect, startIdx int) *database.NotesFilter {
-	// Map from log2timeline field name to the examiner_notes column name.
-	noteFieldMap := map[string]string{
-		"datetime": "datetime",
-		"bookmark": "bookmark",
-		"tag":      "tag",
-		"color":    "color",
-		"desc":     "description",
-	}
-
-	var parts []string
-	var args []interface{}
-	idx := startIdx
-
-	for _, f := range req.Filters {
-		noteCol, ok := noteFieldMap[f.Field]
-		if !ok {
-			continue
-		}
-		var op string
-		switch f.Operator {
-		case "=", "!=", ">=", "<=", "LIKE", "NOT LIKE":
-			op = f.Operator
-		default:
-			continue
-		}
-		val := f.Value
-		if f.Field == "datetime" {
-			val = normalizeDate(val, f.Operator == "<=")
-		}
-		if op == "LIKE" || op == "NOT LIKE" {
-			parts = append(parts, fmt.Sprintf("%s %s %s", noteCol, op, d.Placeholder(idx)))
-			args = append(args, "%"+val+"%")
-		} else {
-			parts = append(parts, fmt.Sprintf("%s %s %s", noteCol, op, d.Placeholder(idx)))
-			args = append(args, val)
-		}
-		idx++
-	}
-
-	// Bookmark-only filter: examiner notes have their own bookmark column.
-	if req.BookmarkOnly {
-		parts = append(parts, fmt.Sprintf("bookmark = %s", d.Placeholder(idx)))
-		args = append(args, int64(1))
-	}
-
-	if len(parts) == 0 {
-		return nil
-	}
-	return &database.NotesFilter{SQL: strings.Join(parts, " AND "), Args: args}
-}
-
-func buildBaseWhere(d query.QueryDialect, baseField, baseOp, baseValue string) (whereClause string, arg interface{}) {
+func buildBaseWhere(d query.QueryDialect, baseField, baseOp, baseValue string) (whereClause string, arg interface{}, err error) {
 	col := d.QuoteColumn(baseField)
 	ph := d.Placeholder(1)
+	if baseField == importIDField {
+		n, err := importIDValue(baseOp, baseValue)
+		if err != nil {
+			return "", nil, err
+		}
+		return fmt.Sprintf("%s = %s", col, ph), n, nil
+	}
 	switch baseOp {
 	case "LIKE", "NOT LIKE":
-		return fmt.Sprintf("%s %s %s", col, baseOp, ph), "%" + baseValue + "%"
+		return fmt.Sprintf("%s %s %s", col, baseOp, ph), "%" + baseValue + "%", nil
 	default:
-		return fmt.Sprintf("%s %s %s", col, baseOp, ph), baseValue
+		return fmt.Sprintf("%s %s %s", col, baseOp, ph), baseValue, nil
 	}
 }
 
@@ -1097,7 +1082,13 @@ func (a *App) GetFilteredDistinctValues(field, baseField, baseOp, baseValue stri
 		return nil, fmt.Errorf("invalid operator: %s", baseOp)
 	}
 	d := a.queryDialect()
-	whereClause, arg := buildBaseWhere(d, baseField, baseOp, baseValue)
+	whereClause, arg, err := buildBaseWhere(d, baseField, baseOp, baseValue)
+	if err != nil {
+		return nil, err
+	}
+	if field == importIDField {
+		whereClause += " AND " + importIDNotNull
+	}
 	return a.store.GetDistinctValuesFiltered(field, whereClause, []interface{}{arg})
 }
 
@@ -1115,7 +1106,10 @@ func (a *App) GetFilteredMinMaxDate(baseField, baseOp, baseValue string) ([]stri
 		return nil, fmt.Errorf("invalid operator: %s", baseOp)
 	}
 	d := a.queryDialect()
-	whereClause, arg := buildBaseWhere(d, baseField, baseOp, baseValue)
+	whereClause, arg, err := buildBaseWhere(d, baseField, baseOp, baseValue)
+	if err != nil {
+		return nil, err
+	}
 	min, max, err := a.store.GetMinMaxDateFiltered(whereClause, []interface{}{arg})
 	if err != nil {
 		return nil, err
@@ -1172,6 +1166,16 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 			if !isValidModelField(f.Field) {
 				continue
 			}
+			if f.Field == importIDField {
+				n, err := importIDValue(f.Operator, f.Value)
+				if err != nil {
+					return nil, err
+				}
+				userParts = append(userParts, fmt.Sprintf("%s = %s", d.QuoteColumn(importIDField), d.Placeholder(paramIdx)))
+				paramIdx++
+				whereArgs = append(whereArgs, n)
+				continue
+			}
 			switch f.Operator {
 			case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
 				val := f.Value
@@ -1226,9 +1230,18 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 		if req.BaseOp == "LIKE" {
 			baseOp = "LIKE"
 		}
+		var baseArg interface{} = req.BaseValue
+		if req.BaseField == importIDField {
+			n, err := importIDValue(baseOperator(req.BaseOp), req.BaseValue)
+			if err != nil {
+				return nil, err
+			}
+			baseOp = "="
+			baseArg = n
+		}
 		alwaysParts = append(alwaysParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(req.BaseField), baseOp, d.Placeholder(paramIdx)))
 		paramIdx++
-		whereArgs = append(whereArgs, req.BaseValue)
+		whereArgs = append(whereArgs, baseArg)
 	}
 
 	logic := "AND"
@@ -1264,6 +1277,35 @@ func (a *App) GetTags() ([]string, error) {
 		return nil, fmt.Errorf("no database open")
 	}
 	return a.store.GetDistinctTags()
+}
+
+// GetImports returns every import record in the open database, ordered by ID.
+func (a *App) GetImports() ([]model.ImportRecord, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("no database open")
+	}
+	return a.store.GetImports()
+}
+
+// GetImport returns one import record, or nil if the ID does not exist.
+func (a *App) GetImport(id int64) (*model.ImportRecord, error) {
+	if a.store == nil {
+		return nil, fmt.Errorf("no database open")
+	}
+	return a.store.GetImport(id)
+}
+
+// importFileNames maps each import record ID to its filename for CSV export.
+func (a *App) importFileNames() (map[int64]string, error) {
+	records, err := a.store.GetImports()
+	if err != nil {
+		return nil, fmt.Errorf("reading import records: %w", err)
+	}
+	names := make(map[int64]string, len(records))
+	for _, rec := range records {
+		names[rec.ID] = rec.Filename
+	}
+	return names, nil
 }
 
 // -- Event Operations --
@@ -1499,6 +1541,12 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 	}
 	defer pgStore.Close()
 
+	// Copy import records first so the event import IDs have rows to point at.
+	importIDMap, err := copyImportRecords(a.store, pgStore, a.logWrite)
+	if err != nil {
+		return "", fmt.Errorf("copying import records to PostgreSQL: %w", err)
+	}
+
 	// Read all events from SQLite using the same pattern as ExportCSV
 	runtime.EventsEmit(a.ctx, "import:progress", map[string]interface{}{
 		"phase": "reading", "message": fmt.Sprintf("Reading %d events from SQLite...", sourceCount), "count": 0, "total": sourceCount,
@@ -1521,6 +1569,10 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 
 	if len(events) == 0 {
 		return "", fmt.Errorf("query returned 0 events from SQLite (expected %d); the database may be empty or the query failed", sourceCount)
+	}
+
+	if cleared := remapImportIDs(events, importIDMap); cleared > 0 {
+		a.logError(fmt.Sprintf("Push: %d events referenced missing import records and were pushed without provenance", cleared))
 	}
 
 	// Insert into PostgreSQL

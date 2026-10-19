@@ -284,6 +284,7 @@ export namespace model {
 	    user_sid: string;
 	    computer_name: string;
 	    bookmark: number;
+	    import_id: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new Event(source);
@@ -322,6 +323,31 @@ export namespace model {
 	        this.user_sid = source["user_sid"];
 	        this.computer_name = source["computer_name"];
 	        this.bookmark = source["bookmark"];
+	        this.import_id = source["import_id"];
+	    }
+	}
+	export class ImportRecord {
+	    id: number;
+	    filename: string;
+	    label: string;
+	    format: string;
+	    imported_at: string;
+	    event_count: number;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportRecord(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.filename = source["filename"];
+	        this.label = source["label"];
+	        this.format = source["format"];
+	        this.imported_at = source["imported_at"];
+	        this.event_count = source["event_count"];
+	        this.status = source["status"];
 	    }
 	}
 

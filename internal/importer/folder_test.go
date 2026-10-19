@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ const minimalMFTECmdBootCSV = "EntryPoint,Signature,BytesPerSector,SectorsPerClu
 // mockStore records insertions and stubs out all other Store methods.
 type mockStore struct {
 	insertedCount int
+	imports       []model.ImportRecord
 }
 
 func (m *mockStore) InsertEvent(_ *model.Event) error { return nil }
@@ -72,6 +74,34 @@ func (m *mockStore) LoadTabSession() (string, error)                           {
 func (m *mockStore) UpdateMetadata() error                                     { return nil }
 func (m *mockStore) RebuildIndexes(_ []string) error                           { return nil }
 func (m *mockStore) Migrate() error                                            { return nil }
+func (m *mockStore) CreateImport(rec model.ImportRecord) (int64, error) {
+	rec.ID = int64(len(m.imports) + 1)
+	rec.Status = "in_progress"
+	m.imports = append(m.imports, rec)
+	return rec.ID, nil
+}
+func (m *mockStore) FinalizeImport(id int64, eventCount int, status string) error {
+	for i := range m.imports {
+		if m.imports[i].ID == id {
+			m.imports[i].EventCount = int64(eventCount)
+			m.imports[i].Status = status
+			return nil
+		}
+	}
+	return fmt.Errorf("no import %d", id)
+}
+func (m *mockStore) GetImports() ([]model.ImportRecord, error) {
+	return append([]model.ImportRecord(nil), m.imports...), nil
+}
+func (m *mockStore) GetImport(id int64) (*model.ImportRecord, error) {
+	for i := range m.imports {
+		if m.imports[i].ID == id {
+			rec := m.imports[i]
+			return &rec, nil
+		}
+	}
+	return nil, nil
+}
 func (m *mockStore) Close() error                                              { return nil }
 func (m *mockStore) Path() string                                              { return ":mock:" }
 
@@ -110,7 +140,7 @@ func TestImportFolderRecursiveDepthCap(t *testing.T) {
 	writeTmpCSV(t, d3, "deep.csv", minimalLECmdCSV)
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -139,7 +169,7 @@ func TestImportFolderRecursiveSymlinkSkip(t *testing.T) {
 	}
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -164,7 +194,7 @@ func TestImportFolderRecursiveCSVFilter(t *testing.T) {
 	}
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -206,7 +236,7 @@ func TestImportFolderRecursiveMixedTree(t *testing.T) {
 
 	store := &mockStore{}
 	var progressCalls int
-	summary, err := ImportFolderRecursive(root, store, func(_ string, _ int) {
+	summary, err := ImportFolderRecursive(root, store, "", nil, func(_ string, _ int) {
 		progressCalls++
 	})
 	if err != nil {
@@ -253,7 +283,7 @@ func TestImportFolderRecursiveNoTimestampSkip(t *testing.T) {
 	writeTmpCSV(t, root, "MFTECmd_$Boot_Output.csv", minimalMFTECmdBootCSV)
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -301,7 +331,7 @@ func TestImportFolderRecursiveSummaryCorrectness(t *testing.T) {
 	writeTmpCSV(t, sub2, "d3.csv", minimalLECmdCSV)
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -330,7 +360,7 @@ func TestImportFolderRecursiveWxTCmdPackageIDsSkipped(t *testing.T) {
 		t.Fatalf("writing test file: %v", err)
 	}
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}

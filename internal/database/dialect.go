@@ -58,7 +58,7 @@ type Dialect interface {
 	DropIndexSQL(indexName string) string
 
 	// InsertEventSQL returns the parameterized INSERT statement for a single event.
-	// The statement has 30 columns and 30 placeholders.
+	// The statement has 31 columns and 31 placeholders.
 	InsertEventSQL() string
 
 	// QuoteColumn returns the column name quoted appropriately for the dialect.
@@ -77,4 +77,13 @@ type Dialect interface {
 	// CreateTabSessionsTableSQL returns DDL for the l2t_tab_sessions table.
 	// This table stores at most one row: the serialized tab session JSON.
 	CreateTabSessionsTableSQL() string
+
+	// CreateImportsTableSQL returns DDL for the l2t_imports table, which records
+	// one row per import run. Events reference a row through log2timeline.import_id.
+	CreateImportsTableSQL() string
+
+	// InsertImportSQL returns the parameterized INSERT for a new l2t_imports row
+	// with columns (filename, label, format, imported_at, event_count, status).
+	// PostgreSQL appends RETURNING id; SQLite callers read LastInsertId instead.
+	InsertImportSQL() string
 }

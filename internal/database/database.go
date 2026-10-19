@@ -47,13 +47,18 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	db.conn.Exec("PRAGMA busy_timeout = 5000")
 
 	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
-	db.migrate()
+	if err := db.migrate(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("migrating database: %w", err)
+	}
 
 	return db, nil
 }
 
-// migrate applies schema migrations for backward compatibility.
-func (db *SQLiteStore) migrate() {
+// migrate applies schema migrations for backward compatibility. Steps that
+// predate import provenance log and continue on error; the import provenance
+// step returns its error because queries now select log2timeline.import_id.
+func (db *SQLiteStore) migrate() error {
 	// Add bookmark column if missing
 	var count int
 	err := db.conn.QueryRow(
@@ -68,6 +73,9 @@ func (db *SQLiteStore) migrate() {
 
 	// Create l2t_tab_sessions table if missing
 	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
+
+	// Add import provenance (l2t_imports table, log2timeline.import_id column)
+	return migrateImportProvenance(db.conn, db.dialect)
 }
 
 // SaveTabSession stores tab session JSON. Deletes any existing row first.
@@ -214,6 +222,13 @@ func (db *SQLiteStore) createSchema(indexFields []string) error {
 		return fmt.Errorf("creating examiner_notes table: %w", err)
 	}
 
+	// Import provenance: adds import_id to a pre-provenance log2timeline table,
+	// then creates l2t_imports and the import_id index. Must run before any
+	// index that depends on the column.
+	if err := migrateImportProvenance(tx, db.dialect); err != nil {
+		return err
+	}
+
 	// Create indexes
 	for _, field := range indexFields {
 		_, err = tx.Exec(db.dialect.CreateIndexSQL(field+"_idx", "log2timeline", field))
@@ -234,7 +249,7 @@ func (db *SQLiteStore) InsertEvent(e *model.Event) error {
 		e.InReport, e.Tag, e.Color, e.Offset, e.StoreNumber,
 		e.StoreIndex, e.VSSStoreNumber, e.URL, e.RecordNumber,
 		e.EventID, e.EventType, e.SourceName, e.UserSID, e.ComputerName,
-		e.Bookmark,
+		e.Bookmark, importIDArg(e.ImportID),
 	)
 	return err
 }
@@ -264,7 +279,7 @@ func (db *SQLiteStore) InsertEvents(events []*model.Event, onProgress func(count
 			e.InReport, e.Tag, e.Color, e.Offset, e.StoreNumber,
 			e.StoreIndex, e.VSSStoreNumber, e.URL, e.RecordNumber,
 			e.EventID, e.EventType, e.SourceName, e.UserSID, e.ComputerName,
-			e.Bookmark,
+			e.Bookmark, importIDArg(e.ImportID),
 		)
 		if err != nil {
 			return inserted, fmt.Errorf("inserting event %d: %w", inserted+1, err)
@@ -291,7 +306,7 @@ func (db *SQLiteStore) QueryEvents(whereClause string, args []interface{}, order
 		"desc, filename, inode, notes, format, extra, datetime, reportnotes, " +
 		"inreport, tag, color, offset, store_number, store_index, vss_store_number, " +
 		"URL, record_number, event_identifier, event_type, source_name, user_sid, " +
-		"computer_name, bookmark FROM log2timeline"
+		"computer_name, bookmark, import_id FROM log2timeline"
 
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -485,8 +500,8 @@ func (db *SQLiteStore) UpdateEvent(rowid int64, fields map[string]interface{}) e
 
 	paramIdx := 1
 	for field, value := range fields {
-		if !isValidField(field) {
-			return fmt.Errorf("invalid field name: %s", field)
+		if err := checkUpdatableField(field); err != nil {
+			return err
 		}
 		setClauses = append(setClauses, field+" = "+db.dialect.Placeholder(paramIdx))
 		paramIdx++
@@ -602,6 +617,13 @@ func (db *SQLiteStore) RebuildIndexes(indexFields []string) error {
 		}
 	}
 
+	// The drop loop above removed import_id_idx because import_id is in
+	// model.Fields. Recreate it so import lookups stay indexed.
+	_, err = tx.Exec(db.dialect.CreateIndexSQL(importIDIndexName, "log2timeline", "import_id"))
+	if err != nil {
+		return fmt.Errorf("recreating import_id index: %w", err)
+	}
+
 	return tx.Commit()
 }
 
@@ -650,8 +672,7 @@ func (db *SQLiteStore) DeleteQuery(name string) error {
 
 // Migrate applies any pending schema migrations.
 func (db *SQLiteStore) Migrate() error {
-	db.migrate()
-	return nil
+	return db.migrate()
 }
 
 // InsertExaminerNote inserts a new examiner note and returns its negated ID.
@@ -852,7 +873,8 @@ func examinerNotesUnionPatternB(dialect Dialect) string {
 	// Pattern B: id, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
 	//            filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
 	//            offset, store_number, store_index, vss_store_number, URL, record_number,
-	//            event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+	//            event_identifier, event_type, source_name, user_sid, computer_name, bookmark,
+	//            import_id
 	return " UNION ALL SELECT " +
 		"-id, datetime, '' AS timezone, '' AS " + dialect.QuoteColumn("MACB") + ", " +
 		"'EXAMINER' AS source, 'Examiner Note' AS sourcetype, '' AS type, '' AS " + dialect.QuoteColumn("user") + ", " +
@@ -862,7 +884,7 @@ func examinerNotesUnionPatternB(dialect Dialect) string {
 		"0 AS " + dialect.QuoteColumn("offset") + ", 0 AS store_number, 0 AS store_index, " +
 		"0 AS vss_store_number, '' AS URL, '' AS record_number, " +
 		"'' AS event_identifier, '' AS event_type, '' AS source_name, " +
-		"'' AS user_sid, '' AS computer_name, bookmark " +
+		"'' AS user_sid, '' AS computer_name, bookmark, NULL AS import_id " +
 		"FROM examiner_notes"
 }
 
@@ -1125,7 +1147,8 @@ func combineArgs(args []interface{}, notesFilter *NotesFilter) []interface{} {
 //	rowid, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
 //	filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
 //	offset, store_number, store_index, vss_store_number, URL, record_number,
-//	event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+//	event_identifier, event_type, source_name, user_sid, computer_name, bookmark,
+//	import_id
 //
 // Note: datetime is at position 2 (right after rowid), NOT at position 15.
 // This is Pattern B, distinct from scanEvents which uses Pattern A.
@@ -1133,6 +1156,7 @@ func scanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
 		e := &model.Event{}
+		var importID sql.NullInt64
 		err := rows.Scan(
 			&e.ID, &e.Datetime, &e.Timezone, &e.MACB, &e.Source, &e.SourceType,
 			&e.Type, &e.User, &e.Host, &e.Desc, &e.Filename,
@@ -1140,11 +1164,12 @@ func scanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 			&e.InReport, &e.Tag, &e.Color, &e.Offset, &e.StoreNumber,
 			&e.StoreIndex, &e.VSSStoreNumber, &e.URL, &e.RecordNumber,
 			&e.EventID, &e.EventType, &e.SourceName, &e.UserSID, &e.ComputerName,
-			&e.Bookmark,
+			&e.Bookmark, &importID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning event row: %w", err)
 		}
+		e.ImportID = importID.Int64
 		events = append(events, e)
 	}
 	return events, rows.Err()
@@ -1155,6 +1180,7 @@ func scanEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
 		e := &model.Event{}
+		var importID sql.NullInt64
 		err := rows.Scan(
 			&e.ID, &e.Timezone, &e.MACB, &e.Source, &e.SourceType,
 			&e.Type, &e.User, &e.Host, &e.Desc, &e.Filename,
@@ -1162,11 +1188,12 @@ func scanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			&e.ReportNotes, &e.InReport, &e.Tag, &e.Color, &e.Offset,
 			&e.StoreNumber, &e.StoreIndex, &e.VSSStoreNumber, &e.URL,
 			&e.RecordNumber, &e.EventID, &e.EventType, &e.SourceName,
-			&e.UserSID, &e.ComputerName, &e.Bookmark,
+			&e.UserSID, &e.ComputerName, &e.Bookmark, &importID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning event row: %w", err)
 		}
+		e.ImportID = importID.Int64
 		events = append(events, e)
 	}
 	return events, rows.Err()

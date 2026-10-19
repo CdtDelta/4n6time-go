@@ -137,7 +137,7 @@ func TestImportFolderRecursiveMixedFamilies(t *testing.T) {
 	writeTmpCSV(t, root, "unknown.csv", "Name,Value\nfoo,bar\n")
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestDedupeSameBaseNameKeepsJSONL(t *testing.T) {
 	writeTmpCSV(t, root, "ul.jsonl", ulJSONL(ulBootUUID, "2026-10-07T14:53:48.542682112Z"))
 
 	store := &mockStore{}
-	summary, err := ImportFolderRecursive(root, store, nil)
+	summary, err := ImportFolderRecursive(root, store, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestDedupeFingerprintAcrossDirectories(t *testing.T) {
 	writeTmpCSV(t, mkDir(t, root, "a_csv"), "export_one.csv", ulCSV(t, ulBootUUID, "2026-10-07T14:53:48.542Z"))
 	writeTmpCSV(t, mkDir(t, root, "b_jsonl"), "events_two.jsonl", ulJSONL(ulBootUUID, "2026-10-07T14:53:48.542682112Z"))
 
-	summary, err := ImportFolderRecursive(root, &mockStore{}, nil)
+	summary, err := ImportFolderRecursive(root, &mockStore{}, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestDedupeSameBootDifferentTimestamps(t *testing.T) {
 	writeTmpCSV(t, root, "morning.jsonl", ulJSONL(ulBootUUID, "2026-10-07T09:00:00.000000000Z"))
 	writeTmpCSV(t, root, "evening.jsonl", ulJSONL(ulBootUUID, "2026-10-07T21:00:00.000000000Z"))
 
-	summary, err := ImportFolderRecursive(root, &mockStore{}, nil)
+	summary, err := ImportFolderRecursive(root, &mockStore{}, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestDedupeIdenticalJSONLKeepsFirstInWalkOrder(t *testing.T) {
 	writeTmpCSV(t, root, "a_copy.jsonl", content)
 	writeTmpCSV(t, root, "b_copy.jsonl", content)
 
-	summary, err := ImportFolderRecursive(root, &mockStore{}, nil)
+	summary, err := ImportFolderRecursive(root, &mockStore{}, "", nil, nil)
 	if err != nil {
 		t.Fatalf("ImportFolderRecursive: %v", err)
 	}

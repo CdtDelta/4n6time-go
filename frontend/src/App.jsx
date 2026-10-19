@@ -3,8 +3,9 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, ImportCSV, ImportFolderRecursive, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
+import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
+import ImportLabelDialog from './components/ImportLabelDialog'
 import PostgresDialog from './components/PostgresDialog'
 import FilterPanel from './components/FilterPanel'
 import EventDetail from './components/EventDetail'
@@ -125,8 +126,25 @@ const defaultColDefs = [
   { field: 'computer_name', headerName: 'Computer', width: 120, hide: true },
 ]
 
+// pathBaseName returns the last element of a path, accepting either separator.
+function pathBaseName(p) {
+  return p.split(/[\\/]/).filter(Boolean).pop() || ''
+}
+
+// fileStem returns a file's base name without its final extension
+// (WKSTN04.jsonl -> WKSTN04). A leading dot is not treated as an extension.
+function fileStem(p) {
+  const base = pathBaseName(p)
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(0, dot) : base
+}
+
 function App() {
   const [dbInfo, setDbInfo] = useState(null)
+  // Pending import awaiting a label: { kind: 'file'|'folder', path, defaultLabel }
+  const [importPick, setImportPick] = useState(null)
+  // Import records keyed by id, loaded when a database opens or an import finishes
+  const [importRecords, setImportRecords] = useState({})
   const [events, setEvents] = useState([])
   const [totalCount, setTotalCount] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -232,6 +250,26 @@ function App() {
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
   useEffect(() => { dbInfoRef.current = dbInfo }, [dbInfo])
+
+  // Import records are loaded once per database state change. Every open and
+  // every completed import sets dbInfo, so this covers all of them. Event
+  // details look up records here instead of calling the backend per event.
+  useEffect(() => {
+    if (!dbInfo) {
+      setImportRecords({})
+      return
+    }
+    let cancelled = false
+    GetImports()
+      .then((recs) => {
+        if (!cancelled) setImportRecords(Object.fromEntries((recs || []).map(r => [r.id, r])))
+      })
+      .catch((err) => {
+        console.error('Loading import records:', err)
+        if (!cancelled) setImportRecords({})
+      })
+    return () => { cancelled = true }
+  }, [dbInfo])
   useEffect(() => {
     liveTabStateRef.current = { page: currentPage, search: activeSearch, searchMode, searchText, filters: activeFilters, bookmarkOnly }
   }, [currentPage, activeSearch, searchMode, searchText, activeFilters, bookmarkOnly])
@@ -331,8 +369,17 @@ function App() {
         const bq = activeBaseQueryRef.current
         let clause = activeSearch
         if (bq && bq.field) {
-          const safeVal = bq.value.replace(/'/g, "''")
-          clause = `${bq.field} ${bq.op} '${safeVal}' AND (${activeSearch})`
+          if (bq.field === 'import_id') {
+            // import_id is an integer column: send a whole number, unquoted.
+            const id = Number(bq.value)
+            if (!Number.isSafeInteger(id) || id <= 0) {
+              throw new Error('Import tab has an invalid import id')
+            }
+            clause = `import_id = ${id} AND (${activeSearch})`
+          } else {
+            const safeVal = bq.value.replace(/'/g, "''")
+            clause = `${bq.field} ${bq.op} '${safeVal}' AND (${activeSearch})`
+          }
         }
         result = await AdvancedSearch(clause, page, PAGE_SIZE)
       } else {
@@ -476,11 +523,11 @@ function App() {
     }
   }, [])
 
-  const handleImportCSV = useCallback(async () => {
+  const doImportCSV = useCallback(async (path, label) => {
     try {
       setImporting(true)
       setStatus('Importing timeline...')
-      const info = await ImportCSV()
+      const info = await ImportCSV(path, label)
       if (info) {
         setDbInfo(info)
         setActiveFilters(null)
@@ -513,11 +560,23 @@ function App() {
     }
   }, [loadPage, handleRestoreTabSession])
 
-  const handleImportFolderRecursive = useCallback(async () => {
+  // Import Timeline: choose a file, then ask for a label, then import.
+  // Cancelling the file dialog or the label dialog does nothing.
+  const handleImportCSV = useCallback(async () => {
+    try {
+      const path = await SelectImportFile()
+      if (!path) return
+      setImportPick({ kind: 'file', path, defaultLabel: fileStem(path) })
+    } catch (err) {
+      setStatus('Error: ' + err)
+    }
+  }, [])
+
+  const doImportFolderRecursive = useCallback(async (path, label) => {
     try {
       setImporting(true)
       setStatus('Importing folder (recursive)...')
-      const summary = await ImportFolderRecursive()
+      const summary = await ImportFolderRecursive(path, label)
       if (summary) {
         const info = await GetCurrentDBInfo()
         if (info) {
@@ -539,6 +598,29 @@ function App() {
       setImporting(false)
     }
   }, [loadPage])
+
+  // Import Folder (Recursive): choose a folder, then ask for a label, then import.
+  const handleImportFolderRecursive = useCallback(async () => {
+    try {
+      const path = await SelectImportFolder()
+      if (!path) return
+      setImportPick({ kind: 'folder', path, defaultLabel: pathBaseName(path) })
+    } catch (err) {
+      setStatus('Error: ' + err)
+    }
+  }, [])
+
+  // Runs the import the label dialog confirmed.
+  const handleImportConfirmed = useCallback((label) => {
+    const pick = importPick
+    setImportPick(null)
+    if (!pick) return
+    if (pick.kind === 'file') {
+      doImportCSV(pick.path, label)
+    } else {
+      doImportFolderRecursive(pick.path, label)
+    }
+  }, [importPick, doImportCSV, doImportFolderRecursive])
 
   const handleCloseDB = useCallback(async () => {
     try {
@@ -1045,6 +1127,20 @@ function App() {
       }
     }
 
+    // Import pivot: evidence rows with an import get one entry for that import.
+    // The tab title is the import's label or file name, never its numeric id.
+    if (row.id > 0 && row.import_id > 0) {
+      const rec = importRecords[row.import_id]
+      const name = rec ? (rec.label || rec.filename) : '(record missing)'
+      items.push({
+        tabLabel: `import: ${name}`,
+        menuLabel: `Import: ${name}`,
+        field: 'import_id',
+        op: '=',
+        value: String(row.import_id),
+      })
+    }
+
     const estimatedHeight = 40 + items.length * 30
     const estimatedWidth = 400
     let menuX = params.event.clientX
@@ -1055,7 +1151,7 @@ function App() {
     if (menuY < 8) menuY = 8
 
     setContextMenu({ x: menuX, y: menuY, items })
-  }, [])
+  }, [importRecords])
 
   // Close context menu on outside click or Escape
   useEffect(() => {
@@ -1155,10 +1251,21 @@ function App() {
   const activeTab = tabs.find(t => t.id === activeTabId)
 
   // If no database is open, show the welcome screen
+  const importLabelDialog = (
+    <ImportLabelDialog
+      visible={importPick !== null}
+      title={importPick?.kind === 'folder' ? 'Import Folder (Recursive)' : 'Import Timeline'}
+      defaultLabel={importPick?.defaultLabel || ''}
+      onImport={handleImportConfirmed}
+      onCancel={() => setImportPick(null)}
+    />
+  )
+
   if (!dbInfo) {
     return (
       <div className="app-container">
         <ImportProgress visible={importing} />
+        {importLabelDialog}
         <ThemePicker
           visible={showThemePicker}
           currentTheme={currentTheme}
@@ -1214,6 +1321,7 @@ function App() {
   return (
     <div className="app-container">
       <ImportProgress visible={importing} />
+      {importLabelDialog}
 
       <div className="toolbar">
         <button onClick={handleOpenDB}>Open</button>
@@ -1496,6 +1604,7 @@ function App() {
           filterVersion={filterVersion}
           baseQuery={activeTab?.baseQuery || null}
           disabled={searchMode === 'advanced'}
+          importRecords={importRecords}
         />
 
         <SavedQueries
@@ -1599,6 +1708,7 @@ function App() {
                 searchText={activeSearch}
                 onToggleBookmark={handleBookmarkToggle}
                 onDeleteNote={handleDeleteExaminerNote}
+                importRecords={importRecords}
               />
             </>
           )}

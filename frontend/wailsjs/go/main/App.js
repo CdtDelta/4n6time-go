@@ -78,6 +78,14 @@ export function GetFilteredMinMaxDate(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetFilteredMinMaxDate'](arg1, arg2, arg3);
 }
 
+export function GetImport(arg1) {
+  return window['go']['main']['App']['GetImport'](arg1);
+}
+
+export function GetImports() {
+  return window['go']['main']['App']['GetImports']();
+}
+
 export function GetLoggingStatus() {
   return window['go']['main']['App']['GetLoggingStatus']();
 }
@@ -110,12 +118,12 @@ export function GetVersion() {
   return window['go']['main']['App']['GetVersion']();
 }
 
-export function ImportCSV() {
-  return window['go']['main']['App']['ImportCSV']();
+export function ImportCSV(arg1, arg2) {
+  return window['go']['main']['App']['ImportCSV'](arg1, arg2);
 }
 
-export function ImportFolderRecursive() {
-  return window['go']['main']['App']['ImportFolderRecursive']();
+export function ImportFolderRecursive(arg1, arg2) {
+  return window['go']['main']['App']['ImportFolderRecursive'](arg1, arg2);
 }
 
 export function LoadTabSession() {
@@ -140,6 +148,14 @@ export function SaveQuery(arg1, arg2) {
 
 export function SaveTabSession(arg1) {
   return window['go']['main']['App']['SaveTabSession'](arg1);
+}
+
+export function SelectImportFile() {
+  return window['go']['main']['App']['SelectImportFile']();
+}
+
+export function SelectImportFolder() {
+  return window['go']['main']['App']['SelectImportFolder']();
 }
 
 export function SetAutoRestoreTabs(arg1) {

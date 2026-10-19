@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cdtdelta/4n6time/internal/csvparser"
 	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/cdtdelta/4n6time/internal/model"
 )
@@ -124,12 +123,17 @@ func newExportTestApp(t *testing.T) *App {
 	return &App{store: store, driver: "sqlite"}
 }
 
-// writeEventsCSV renders events with the same writer ExportCSV uses, so the
-// result can be compared byte for byte with an export file.
-func writeEventsCSV(t *testing.T, events []*model.Event) []byte {
+// writeEventsCSV renders events through writeExportCSV, the writer ExportCSV
+// uses, with the same import filename map the export builds, so the result can
+// be compared byte for byte with an export file.
+func writeEventsCSV(t *testing.T, app *App, events []*model.Event) []byte {
 	t.Helper()
+	importFiles, err := app.importFileNames()
+	if err != nil {
+		t.Fatalf("reading import filenames: %v", err)
+	}
 	path := filepath.Join(t.TempDir(), "expected.csv")
-	if err := csvparser.WriteEvents(path, events); err != nil {
+	if err := writeExportCSV(path, events, importFiles); err != nil {
 		t.Fatalf("writing expected CSV: %v", err)
 	}
 	data, err := os.ReadFile(path)
@@ -245,7 +249,7 @@ func TestExportCSVAdvancedMatchesGrid(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading export: %v", err)
 			}
-			want := writeEventsCSV(t, gridEvents)
+			want := writeEventsCSV(t, app, gridEvents)
 			if !bytes.Equal(got, want) {
 				t.Errorf("export does not match grid rows\n--- export ---\n%s\n--- grid ---\n%s", got, want)
 			}
@@ -322,7 +326,7 @@ func TestExportCSVSimpleUnchanged(t *testing.T) {
 				t.Fatalf("reading export: %v", err)
 			}
 
-			if !bytes.Equal(got, writeEventsCSV(t, grid.Events)) {
+			if !bytes.Equal(got, writeEventsCSV(t, app, grid.Events)) {
 				t.Errorf("simple export does not match QueryEvents rows\n%s", got)
 			}
 			// Header line plus one line per row.

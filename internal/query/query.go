@@ -40,6 +40,9 @@ type Predicate struct {
 	field string
 	op    Operator
 	value string
+	// arg, when set, is bound as the parameter value instead of value. Typed
+	// predicates (SimpleInt) use it so integer columns compare as numbers.
+	arg   interface{}
 	date1 string
 	date2 string
 	left  *Predicate
@@ -67,6 +70,21 @@ func Simple(field string, op Operator, value string) *Predicate {
 		field: field,
 		op:    op,
 		value: value,
+	}
+}
+
+// SimpleInt creates an equality or inequality predicate whose parameter is bound
+// as an integer, for integer columns such as import_id. Other operators, and
+// unknown fields, return nil.
+func SimpleInt(field string, op Operator, value int64) *Predicate {
+	if !isValidField(field) || (op != Equal && op != NotEqual) {
+		return nil
+	}
+	return &Predicate{
+		kind:  predSimple,
+		field: field,
+		op:    op,
+		arg:   value,
 	}
 }
 
@@ -141,6 +159,10 @@ func (p *Predicate) whereClauseWithDialect(d QueryDialect, startIdx int) (string
 	case predSimple:
 		placeholder := d.Placeholder(startIdx)
 		quotedField := d.QuoteColumn(p.field)
+		if p.arg != nil {
+			return fmt.Sprintf("(%s %s %s)", quotedField, p.op, placeholder),
+				[]interface{}{p.arg}, startIdx + 1
+		}
 		if p.op == Like || p.op == NotLike {
 			return fmt.Sprintf("(%s %s %s)", quotedField, p.op, placeholder),
 				[]interface{}{"%" + p.value + "%"}, startIdx + 1
@@ -217,11 +239,14 @@ func (p *Predicate) Fields() []string {
 // Query builds a full SELECT statement from predicates, ordering, and pagination.
 type Query struct {
 	predicates []*Predicate
-	logic      Logic
-	orderBy    string
-	pageSize   int
-	page       int
-	dialect    QueryDialect
+	// base is the tab base query. It is ANDed with the whole filter set, so it
+	// applies regardless of the filters' AND/OR logic.
+	base     *Predicate
+	logic    Logic
+	orderBy  string
+	pageSize int
+	page     int
+	dialect  QueryDialect
 }
 
 // New creates a new Query with the given page size.
@@ -246,6 +271,25 @@ func (q *Query) SetLogic(logic Logic) {
 }
 
 // AddPredicate appends a predicate to the query. Nil predicates are ignored.
+// SetBase sets the tab base predicate. nil clears it.
+func (q *Query) SetBase(p *Predicate) {
+	q.base = p
+}
+
+// wherePredicate returns the full WHERE predicate: the base ANDed with the
+// filters, which are combined with the query's logic. It returns nil when there
+// is neither a base nor a filter.
+func (q *Query) wherePredicate() *Predicate {
+	user := Combine(q.predicates, q.logic)
+	if q.base == nil {
+		return user
+	}
+	if user == nil {
+		return q.base
+	}
+	return Combine([]*Predicate{q.base, user}, AND)
+}
+
 func (q *Query) AddPredicate(p *Predicate) {
 	if p != nil {
 		q.predicates = append(q.predicates, p)
@@ -308,14 +352,11 @@ func (q *Query) Build() (string, []interface{}) {
 	var allArgs []interface{}
 
 	// Build WHERE clause from predicates
-	if len(q.predicates) > 0 {
-		combined := Combine(q.predicates, q.logic)
-		if combined != nil {
-			whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
-			if whereSQL != "" {
-				sql += " WHERE " + whereSQL
-				allArgs = append(allArgs, whereArgs...)
-			}
+	if combined := q.wherePredicate(); combined != nil {
+		whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
+		if whereSQL != "" {
+			sql += " WHERE " + whereSQL
+			allArgs = append(allArgs, whereArgs...)
 		}
 	}
 
@@ -340,14 +381,11 @@ func (q *Query) BuildCount() (string, []interface{}) {
 
 	var allArgs []interface{}
 
-	if len(q.predicates) > 0 {
-		combined := Combine(q.predicates, q.logic)
-		if combined != nil {
-			whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
-			if whereSQL != "" {
-				sql += " WHERE " + whereSQL
-				allArgs = append(allArgs, whereArgs...)
-			}
+	if combined := q.wherePredicate(); combined != nil {
+		whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
+		if whereSQL != "" {
+			sql += " WHERE " + whereSQL
+			allArgs = append(allArgs, whereArgs...)
 		}
 	}
 
@@ -358,7 +396,11 @@ func (q *Query) BuildCount() (string, []interface{}) {
 func (q *Query) PredicateFields() []string {
 	seen := make(map[string]bool)
 	var result []string
-	for _, p := range q.predicates {
+	preds := q.predicates
+	if q.base != nil {
+		preds = append([]*Predicate{q.base}, preds...)
+	}
+	for _, p := range preds {
 		for _, f := range p.Fields() {
 			if !seen[f] {
 				seen[f] = true

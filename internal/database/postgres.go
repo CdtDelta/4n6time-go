@@ -70,7 +70,10 @@ func OpenPostgres(connStr string) (*PostgresStore, error) {
 	db := &PostgresStore{connStr: connStr, conn: conn, dialect: d}
 
 	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
-	db.migrate()
+	if err := db.migrate(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("migrating database: %w", err)
+	}
 
 	return db, nil
 }
@@ -144,8 +147,10 @@ func (db *PostgresStore) Conn() *sql.DB {
 	return db.conn
 }
 
-// migrate applies schema migrations for backward compatibility.
-func (db *PostgresStore) migrate() {
+// migrate applies schema migrations for backward compatibility. Steps that
+// predate import provenance log and continue on error; the import provenance
+// step returns its error because queries now select log2timeline.import_id.
+func (db *PostgresStore) migrate() error {
 	// Add bookmark column if missing
 	var count int
 	err := db.conn.QueryRow(
@@ -160,12 +165,14 @@ func (db *PostgresStore) migrate() {
 
 	// Create l2t_tab_sessions table if missing
 	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
+
+	// Add import provenance (l2t_imports table, log2timeline.import_id column)
+	return migrateImportProvenance(db.conn, db.dialect)
 }
 
 // Migrate applies any pending schema migrations.
 func (db *PostgresStore) Migrate() error {
-	db.migrate()
-	return nil
+	return db.migrate()
 }
 
 // SaveTabSession stores tab session JSON. Deletes any existing row first.
@@ -444,6 +451,13 @@ func (db *PostgresStore) createSchema(indexFields []string) error {
 		return fmt.Errorf("creating examiner_notes table: %w", err)
 	}
 
+	// Import provenance: adds import_id to a pre-provenance log2timeline table,
+	// then creates l2t_imports and the import_id index. Must run before any
+	// index that depends on the column.
+	if err := migrateImportProvenance(tx, db.dialect); err != nil {
+		return err
+	}
+
 	// Create indexes
 	for _, field := range indexFields {
 		_, err = tx.Exec(db.dialect.CreateIndexSQL(field+"_idx", "log2timeline", field))
@@ -471,7 +485,7 @@ func (db *PostgresStore) InsertEvent(e *model.Event) error {
 		pgSanitizeString(e.EventID), pgSanitizeString(e.EventType),
 		pgSanitizeString(e.SourceName), pgSanitizeString(e.UserSID),
 		pgSanitizeString(e.ComputerName),
-		e.Bookmark,
+		e.Bookmark, importIDArg(e.ImportID),
 	)
 	return err
 }
@@ -508,7 +522,7 @@ func (db *PostgresStore) InsertEvents(events []*model.Event, onProgress func(cou
 			pgSanitizeString(e.EventID), pgSanitizeString(e.EventType),
 			pgSanitizeString(e.SourceName), pgSanitizeString(e.UserSID),
 			pgSanitizeString(e.ComputerName),
-			e.Bookmark,
+			e.Bookmark, importIDArg(e.ImportID),
 		)
 		if err != nil {
 			return inserted, fmt.Errorf("inserting event %d: %w", inserted+1, err)
@@ -534,7 +548,7 @@ func (db *PostgresStore) QueryEvents(whereClause string, args []interface{}, ord
 		`"desc", filename, inode, notes, format, extra, datetime, reportnotes, ` +
 		`inreport, tag, color, "offset", store_number, store_index, vss_store_number, ` +
 		`URL, record_number, event_identifier, event_type, source_name, user_sid, ` +
-		`computer_name, bookmark FROM log2timeline`
+		`computer_name, bookmark, import_id FROM log2timeline`
 
 	if whereClause != "" {
 		query += " WHERE " + whereClause
@@ -736,8 +750,8 @@ func (db *PostgresStore) UpdateEvent(rowid int64, fields map[string]interface{})
 
 	paramIdx := 1
 	for field, value := range fields {
-		if !isValidField(field) {
-			return fmt.Errorf("invalid field name: %s", field)
+		if err := checkUpdatableField(field); err != nil {
+			return err
 		}
 		setClauses = append(setClauses, pgQuoteCol(field)+" = "+db.dialect.Placeholder(paramIdx))
 		paramIdx++
@@ -854,6 +868,13 @@ func (db *PostgresStore) RebuildIndexes(indexFields []string) error {
 		if err != nil {
 			return fmt.Errorf("creating index %s_idx: %w", f, err)
 		}
+	}
+
+	// The drop loop above removed import_id_idx because import_id is in
+	// model.Fields. Recreate it so import lookups stay indexed.
+	_, err = tx.Exec(db.dialect.CreateIndexSQL(importIDIndexName, "log2timeline", "import_id"))
+	if err != nil {
+		return fmt.Errorf("recreating import_id index: %w", err)
 	}
 
 	return tx.Commit()
@@ -1013,7 +1034,7 @@ func (db *PostgresStore) GetTimelineHistogram(whereClause string, whereArgs []in
 //	filename, inode, notes, format, extra, datetime, reportnotes,
 //	inreport, tag, color, offset, store_number, store_index,
 //	vss_store_number, URL, record_number, event_identifier, event_type,
-//	source_name, user_sid, computer_name, bookmark
+//	source_name, user_sid, computer_name, bookmark, import_id
 func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
@@ -1026,7 +1047,7 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			offset, storeNumber, storeIndex, vssStoreNumber         sql.NullInt64
 			url, recordNumber, eventID, eventType                   sql.NullString
 			sourceName, userSID, computerName                       sql.NullString
-			bookmark                                                sql.NullInt64
+			bookmark, importID                                      sql.NullInt64
 		)
 
 		err := rows.Scan(
@@ -1036,7 +1057,7 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			&reportnotes, &inreport, &tag, &color, &offset,
 			&storeNumber, &storeIndex, &vssStoreNumber, &url,
 			&recordNumber, &eventID, &eventType, &sourceName,
-			&userSID, &computerName, &bookmark,
+			&userSID, &computerName, &bookmark, &importID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning event row: %w", err)
@@ -1074,6 +1095,7 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			UserSID:        userSID.String,
 			ComputerName:   computerName.String,
 			Bookmark:       bookmark.Int64,
+			ImportID:       importID.Int64,
 		}
 		events = append(events, e)
 	}
@@ -1089,7 +1111,8 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 //	id, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
 //	filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
 //	offset, store_number, store_index, vss_store_number, URL, record_number,
-//	event_identifier, event_type, source_name, user_sid, computer_name, bookmark
+//	event_identifier, event_type, source_name, user_sid, computer_name, bookmark,
+//	import_id
 func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
@@ -1102,7 +1125,7 @@ func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 			offset, storeNumber, storeIndex, vssStoreNumber         sql.NullInt64
 			url, recordNumber, eventID, eventType                   sql.NullString
 			sourceName, userSID, computerName                       sql.NullString
-			bookmark                                                sql.NullInt64
+			bookmark, importID                                      sql.NullInt64
 		)
 
 		err := rows.Scan(
@@ -1112,7 +1135,7 @@ func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 			&inreport, &tag, &color, &offset, &storeNumber,
 			&storeIndex, &vssStoreNumber, &url, &recordNumber,
 			&eventID, &eventType, &sourceName, &userSID, &computerName,
-			&bookmark,
+			&bookmark, &importID,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scanning event row: %w", err)
@@ -1150,6 +1173,7 @@ func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 			UserSID:        userSID.String,
 			ComputerName:   computerName.String,
 			Bookmark:       bookmark.Int64,
+			ImportID:       importID.Int64,
 		}
 		events = append(events, e)
 	}

@@ -2,10 +2,20 @@ import { useState, useEffect, useCallback } from 'react'
 import { GetDistinctValues, GetMinMaxDate, GetFilteredDistinctValues, GetFilteredMinMaxDate } from '../../wailsjs/go/main/App'
 
 const ADVANCED_MODE_TIP = 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
+const OPERATORS = ['=', '!=', 'LIKE', 'NOT LIKE']
+
+// importOptionLabel is the dropdown text for one import: its label and file
+// name when it has a label, otherwise its file name. Records missing from the
+// map (not expected once loaded) fall back to a plain note, never the bare id.
+function importOptionLabel(id, records) {
+  const rec = records[id]
+  if (!rec) return `Import ${id} (record missing)`
+  return rec.label ? `${rec.label} (${rec.filename})` : rec.filename
+}
 
 // disabled is set while advanced search mode is active. The controls keep
 // their values so switching back to simple mode restores them unchanged.
-function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion, baseQuery, disabled = false }) {
+function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterVersion, baseQuery, disabled = false, importRecords = {} }) {
   const [filters, setFilters] = useState([])
   const [logic, setLogic] = useState('AND')
   const [dateFrom, setDateFrom] = useState('')
@@ -29,6 +39,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
     { field: 'type', label: 'Type' },
     { field: 'user', label: 'User' },
     { field: 'host', label: 'Host' },
+    { field: 'import_id', label: 'Import' },
   ]
 
   // Load distinct values when panel becomes visible or db changes
@@ -49,7 +60,11 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
             result = await GetDistinctValues(f.field)
           }
           if (!cancelled && result) {
-            values[f.field] = Object.keys(result).sort()
+            // Import ids sort numerically; every other field sorts as text.
+            const keys = Object.keys(result)
+            values[f.field] = f.field === 'import_id'
+              ? keys.sort((a, b) => Number(a) - Number(b))
+              : keys.sort()
           }
         } catch (err) {
           console.error(`Error loading ${f.field} values:`, err)
@@ -90,6 +105,17 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
 
   const addFilter = useCallback(() => {
     setFilters(prev => [...prev, { field: 'source', operator: '=', value: '' }])
+  }, [])
+
+  // Changing to the Import field forces "=": import ids support nothing else.
+  const changeField = useCallback((index, field) => {
+    setFilters(prev => {
+      const updated = [...prev]
+      updated[index] = field === 'import_id'
+        ? { ...updated[index], field, operator: '=' }
+        : { ...updated[index], field }
+      return updated
+    })
   }, [])
 
   const updateFilter = useCallback((index, key, val) => {
@@ -190,7 +216,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
           <div key={i} className="filter-row">
             <select
               value={filter.field}
-              onChange={(e) => updateFilter(i, 'field', e.target.value)}
+              onChange={(e) => changeField(i, e.target.value)}
               disabled={disabled}
               title={tip}
             >
@@ -210,14 +236,26 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
               disabled={disabled}
               title={tip}
             >
-              <option value="=">=</option>
-              <option value="!=">!=</option>
-              <option value="LIKE">LIKE</option>
-              <option value="NOT LIKE">NOT LIKE</option>
+              {(filter.field === 'import_id' ? ['='] : OPERATORS).map(op => (
+                <option key={op} value={op}>{op}</option>
+              ))}
             </select>
 
-            {/* Show dropdown if we have distinct values for this field, text input otherwise */}
-            {distinctValues[filter.field] && filter.operator === '=' ? (
+            {/* Import: a dropdown of imports with events in this tab's scope */}
+            {filter.field === 'import_id' ? (
+              <select
+                value={filter.value}
+                onChange={(e) => updateFilter(i, 'value', e.target.value)}
+                disabled={disabled}
+                title={tip}
+              >
+                <option value="">-- select import --</option>
+                {(distinctValues.import_id || []).map(id => (
+                  <option key={id} value={id}>{importOptionLabel(id, importRecords)}</option>
+                ))}
+              </select>
+            ) : distinctValues[filter.field] && filter.operator === '=' ? (
+              /* Show dropdown if we have distinct values for this field, text input otherwise */
               <select
                 value={filter.value}
                 onChange={(e) => updateFilter(i, 'value', e.target.value)}

@@ -10,7 +10,7 @@ To begin, you can either open an existing database, import a timeline file, or c
 
 Open Database: Opens a previously created SQLite database file (.db). Use File > Open Database or the Open button in the toolbar.
 
-Import Timeline: Imports a timeline file and creates a new SQLite database. Use File > Import Timeline or the Import button in the toolbar. You will be prompted to choose or create a database file, then select the timeline file to import. If you are already connected to a PostgreSQL database, importing writes directly to the server without prompting for a local file.
+Import Timeline: Choose a timeline file, enter an optional label (for example, the hostname the data came from), and the file is imported. If no database is open, you are first asked to choose or create a SQLite database file. Use File > Import Timeline or the Import button in the toolbar. If you are already connected to a PostgreSQL database, importing writes directly to the server without prompting for a local file.
 
 PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
@@ -34,6 +34,8 @@ After import, events are stored in the database (SQLite or PostgreSQL) for fast 
 
 Adding Filters:
 Click "Add Filter" to create a new filter row. Each filter has three parts: a field name (e.g., source, sourcetype, desc), an operator (equals, not equals, contains, not contains), and a value. For equals/not equals, a dropdown shows all distinct values in that field. For contains/not contains, type any text.
+
+Import: The field list includes Import, which filters to one imported file or label. Its dropdown lists each import that has events in the current tab, shown as the label and file name. Only equals is available. Events from before v0.16.0 have no import and are not listed.
 
 Filter Logic:
 Use the AND/OR toggle to control how multiple filters combine. AND means all filters must match. OR means any filter can match.
@@ -129,7 +131,7 @@ Tab queries: When a tab has a base query (opened via right-click), a save icon a
     title: 'Tab System',
     content: `The tab system lets you open multiple filtered views of your data simultaneously, each with independent filters, search, and pagination.
 
-Opening a new tab: Right-click any row in the event grid to open the context menu. Select a field value from the "Search in new tab" options. A new tab opens filtered to events matching that value. Available fields include filename, host, user, source, sourcetype, description, URL, computer name, event identifier, and source name. The original tab is unchanged.
+Opening a new tab: Right-click any row in the event grid to open the context menu. Select a field value from the "Search in new tab" options. A new tab opens filtered to events matching that value. Available fields include filename, host, user, source, sourcetype, description, URL, computer name, event identifier, and source name. For an event that belongs to an import, the menu also has an Import entry that opens a tab showing that import's events. The original tab is unchanged.
 
 Tab behavior: Each tab maintains its own filter state, search term, pagination position, and date range. Switching tabs restores the exact state you left. The filter panel's dropdown values are scoped to that tab's base query, so you see only values present in that tab's data.
 
@@ -191,7 +193,7 @@ Deleting notes: Select an examiner note in the grid to open it in the detail pan
 
 Color coding and bookmarks: You can assign a color to an examiner note using the color picker in the detail panel, and toggle its bookmark star. Colors and bookmarks work the same as for evidence events.
 
-Filtering: Use the source filter with value "EXAMINER" to show only examiner notes, or use advanced search with source = 'EXAMINER'. When filtering by a different source (e.g., source = 'FILE'), examiner notes are automatically excluded from results. In advanced search, source conditions written with IN or LIKE also exclude examiner notes; write source = 'EXAMINER' to include them.`
+Filtering: In simple mode, the source filter decides whether notes appear. source = EXAMINER shows only notes, and source != EXAMINER hides them. source = or != with any other value hides or shows notes just as it does for evidence: source = FILE hides notes, and source != REGISTRY keeps them. A LIKE condition on source hides notes. Color, bookmark, tag, description, and date conditions also apply to notes, so a note must match them to appear. Under OR logic these are combined with OR, as they are for evidence. Host, user, filename, sourcetype, and import conditions hide notes, except under OR logic where a source = EXAMINER term is also in the group: that term shows every note. A pivot tab on a description, tag, color, date, or bookmark field shows only the notes that match it. In advanced search, source conditions written with IN or LIKE also exclude examiner notes; write source = 'EXAMINER' to include them.`
   },
   {
     id: 'bulk-editing',
@@ -225,16 +227,39 @@ Use case: This is useful for building a single investigation database from multi
 
 PostgreSQL: The same behavior applies when connected to a PostgreSQL database. Importing always writes directly to the connected server.
 
+Labels: When you pick a file or folder, you can enter a label such as the hostname the data came from. The label defaults to the file name without its extension, or to the folder name, and you can leave it empty. Each event records its import, so you can filter by Import or pivot to one import from the right-click menu. Labels and file names are recorded when the import runs and cannot be edited afterward.
+
 Note: There is no undo for an import. If you import the wrong file, you would need to start with a fresh database. Consider keeping backups of your database file before importing additional sources.`
+  },
+  {
+    id: 'import-provenance',
+    title: 'Import Labels and Provenance',
+    content: `Every import is recorded. Each file you import, through Import Timeline or Import Folder (Recursive), creates an import record with its file name, an optional label, its format, the time it was imported (UTC), its event count, and a status of complete or failed. Each event stores the import it came from.
+
+Labels: After you choose a file or folder, the import dialog asks for an optional label, for example the host the data came from. The field is pre-filled with the file name without its extension, or with the folder name. Press Enter to import, or Escape to cancel. Cancelling either dialog imports nothing.
+
+Recursive folder import: Each file imported from the folder gets its own record, labeled with the label you enter. Skipped files get no record, including unrecognized formats and duplicate Unified Log exports. A file that failed to parse gets a record with status failed.
+
+Import section: The event detail panel has a read-only Import section with the label, file, format, and import time. Events from before v0.16.0 show "Imported before v0.16.0 (no import record)". Examiner notes have no Import section.
+
+Filtering and pivoting: The filter panel's Import field filters to one import, and right-click an event to open an Import entry in the Search in new tab menu. The new tab's title shows the label, or the file name when there is no label.
+
+Export: The CSV export ends with an import_file column that names the file each event came from. It is empty for events from before v0.16.0. The internal import number is not exported.
+
+PostgreSQL: Push to PostgreSQL copies the import records, and each event stays attached to its import.
+
+Import records are read-only in the application. The label and file name cannot be edited, and records cannot be deleted from the application.`
   },
   {
     id: 'export',
     title: 'Exporting Data',
     content: `Export your current view to a CSV file using File > Export CSV or the Export CSV button in the toolbar.
 
-In simple mode, the export respects your current filters, search, date range, and bookmark-only filter. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
+In simple mode, the export respects your current filters, search, date range, bookmark-only filter, and the tab's base query, and it includes examiner notes as the grid does. Only the events matching your current query are exported. This is useful for creating focused reports or sharing subsets of timeline data with other analysts.
 
 In advanced search (SQL) mode, the export contains exactly the rows shown in the grid: the same WHERE clause, the same tab base query, and the same examiner notes.
+
+Each row ends with an import_file column that names the file the event came from. It is empty for events from before v0.16.0.
 
 You will be prompted to choose a filename and location for the exported CSV file.`
   },

@@ -35,7 +35,8 @@ func (d *SQLiteDialect) CreateTableSQL() string {
 		store_index INT, vss_store_number INT, URL TEXT,
 		record_number TEXT, event_identifier TEXT, event_type TEXT,
 		source_name TEXT, user_sid TEXT, computer_name TEXT,
-		bookmark INT DEFAULT 0
+		bookmark INT DEFAULT 0,
+		import_id INT
 	)`
 }
 
@@ -79,8 +80,8 @@ func (d *SQLiteDialect) InsertEventSQL() string {
 		timezone, MACB, source, sourcetype, type, user, host, desc, filename,
 		inode, notes, format, extra, datetime, reportnotes, inreport, tag, color,
 		offset, store_number, store_index, vss_store_number, URL, record_number,
-		event_identifier, event_type, source_name, user_sid, computer_name, bookmark
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		event_identifier, event_type, source_name, user_sid, computer_name, bookmark, import_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 }
 
 func (d *SQLiteDialect) CreateExaminerNotesTableSQL() string {
@@ -104,4 +105,20 @@ func (d *SQLiteDialect) CreateTabSessionsTableSQL() string {
 		id INTEGER PRIMARY KEY,
 		session_data TEXT
 	)`
+}
+
+func (d *SQLiteDialect) CreateImportsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_imports (
+		id INTEGER PRIMARY KEY,
+		filename TEXT,
+		label TEXT,
+		format TEXT,
+		imported_at TEXT,
+		event_count INT DEFAULT 0,
+		status TEXT
+	)`
+}
+
+func (d *SQLiteDialect) InsertImportSQL() string {
+	return `INSERT INTO l2t_imports (filename, label, format, imported_at, event_count, status) VALUES (?, ?, ?, ?, ?, ?)`
 }

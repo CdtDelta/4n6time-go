@@ -18,6 +18,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 - **Advanced search**: toggle between keyword search and SQL WHERE clause mode with full query syntax
 - **Bulk select and edit**: shift-click or ctrl-click to select multiple rows, then apply color, tags, or bookmarks to all at once
 - **Multi-import**: import additional timeline files into an already-open database to combine evidence sources
+- **Import provenance**: every import is recorded with an optional label (for example, a hostname). Each event shows its import in the detail panel, can be filtered or pivoted by import, and exports with an `import_file` column
 - **Settings** (Tools > Settings): configure tab limit, auto-restore, and default PostgreSQL hostname
 - Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
@@ -146,6 +147,8 @@ Select multiple rows using shift-click (range) or ctrl/cmd-click (individual tog
 ### Multi-Import
 
 When a SQLite or PostgreSQL database is already open, importing a timeline file appends the data to the existing database instead of creating a new one. This lets you combine multiple evidence sources (e.g., multiple hard drive images) into a single investigation database.
+
+**Multi-host cases:** label each import with the hostname it came from when you import it. Then filter by Import, or right-click an event and choose its Import entry, to review one host at a time. The label and file name are recorded when the import runs and cannot be edited afterward.
 
 ### EZ Tools Import
 

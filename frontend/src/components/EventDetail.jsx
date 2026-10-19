@@ -67,8 +67,26 @@ const colorDisplayMap = {
   'BLACK': '#2c3e50',
 }
 
-function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBookmark, onDeleteNote }) {
+// importRowsFor returns what the read-only Import section shows for an event.
+// It returns null for examiner notes, where the section does not apply.
+// Evidence events get either the record's rows or a note explaining why there
+// is no record (ImportID 0 is an event from before import provenance).
+function importRowsFor(event, importRecords) {
+  if (!event || event.id < 0) return null
+  if (!event.import_id) return { notice: 'Imported before v0.16.0 (no import record)' }
+  const rec = importRecords[event.import_id]
+  if (!rec) return { notice: `Import record ${event.import_id} not found` }
+  const rows = []
+  if (rec.label) rows.push(['Label', rec.label])
+  rows.push(['File', rec.filename])
+  rows.push(['Format', rec.format])
+  rows.push(['Imported', rec.imported_at ? rec.imported_at + ' UTC' : ''])
+  return { rows }
+}
+
+function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBookmark, onDeleteNote, importRecords = {} }) {
   const isExaminerNote = event && event.id < 0
+  const importInfo = importRowsFor(event, importRecords)
   const [tag, setTag] = useState('')
   const [color, setColor] = useState('')
   const [notes, setNotes] = useState('')
@@ -162,6 +180,25 @@ function EventDetail({ event, onUpdate, onClose, height, searchText, onToggleBoo
             <label>Extra</label>
             <div className="detail-desc-text">
               <HighlightText text={event.extra} search={searchText} />
+            </div>
+          </div>
+        )}
+
+        {/* Import provenance (read-only) */}
+        {importInfo && (
+          <div className="detail-fields">
+            <div className="detail-group">
+              <div className="detail-group-label">Import</div>
+              {importInfo.notice ? (
+                <div className="detail-field">
+                  <span className="detail-field-value">{importInfo.notice}</span>
+                </div>
+              ) : importInfo.rows.map(([label, value]) => (
+                <div key={label} className="detail-field">
+                  <span className="detail-field-label">{label}</span>
+                  <span className="detail-field-value">{value}</span>
+                </div>
+              ))}
             </div>
           </div>
         )}

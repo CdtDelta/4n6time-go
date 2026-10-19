@@ -83,9 +83,12 @@ func recursiveExtensions(formats []*Format) map[string]struct{} {
 // returns a summary. Symlinks are skipped without error. Files whose extension
 // no recursive entry claims are silently ignored. Duplicate UnifiedLog exports
 // of the same data are imported once; see markUnifiedLogDuplicates.
+// Each imported file gets its own l2t_imports row, named by its path relative
+// to root (forward slashes) and labeled with label. Skipped files get no row.
 // onProgress is called after each successfully imported file with the relative
-// path and the number of events inserted; it may be nil.
-func ImportFolderRecursive(root string, store database.Store, onProgress func(relPath string, eventsInserted int)) (*ImportSummary, error) {
+// path and the number of events inserted; it may be nil. logf receives the
+// import record lifecycle messages and may be nil.
+func ImportFolderRecursive(root string, store database.Store, label string, logf Logger, onProgress func(relPath string, eventsInserted int)) (*ImportSummary, error) {
 	summary := &ImportSummary{
 		PerTool:      make(map[string]ToolStats),
 		ToolFamilies: make(map[string]string),
@@ -112,11 +115,26 @@ func ImportFolderRecursive(root string, store database.Store, onProgress func(re
 			continue
 		}
 
-		inserted, importErr := e.format.Import(e.path, store, nil)
-		if importErr != nil {
-			skip(e.rel, SkipReasonParseError+innerError(importErr).Error())
+		res := runTracked(store, trackedSpec{
+			Filename: filepath.ToSlash(e.rel),
+			Label:    label,
+			Format:   e.label,
+		}, logf, func(s database.Store) (int, error) {
+			return e.format.Import(e.path, s, nil)
+		})
+		if res.ID == 0 {
+			// Nothing was imported, so the file is skipped rather than
+			// leaving events with no provenance.
+			skip(e.rel, res.RecordErr.Error())
 			continue
 		}
+		if res.ImportErr != nil {
+			skip(e.rel, SkipReasonParseError+innerError(res.ImportErr).Error())
+			continue
+		}
+		// A finalize failure here leaves the events in place, so the file
+		// still counts as imported. runTracked has already logged the error.
+		inserted := res.Count
 
 		stats := summary.PerTool[e.label]
 		stats.FileCount++

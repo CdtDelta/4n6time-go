@@ -2,6 +2,36 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.16.0 (2026-10-19)
+
+### Features
+
+- **Import records:** every import, single-file and recursive, creates a row in `l2t_imports` (filename, optional label, format, imported_at in UTC, event_count, status) and stamps its id on each event it inserts (`import_id`).
+- **Import label:** after you choose a file or folder, you can enter an optional label, such as a hostname. It defaults to the file name without its extension, or to the folder name.
+- **Event detail panel:** a read-only Import section shows the label, file, format, and import time. Events from before v0.16.0 show "Imported before v0.16.0 (no import record)".
+- **Import filter and pivot:** an Import field in the filter panel selects one import, and "Import" in the right-click "Search in new tab" menu opens a tab for that import.
+- **CSV export:** the export ends with an `import_file` column that names the file each event came from.
+- **Push to PostgreSQL** copies the import records and remaps each event's import id to its new record.
+
+### Bug fixes
+
+- **Tab base query ANDed outside the filter logic.** In the grid and the result count, a pivot tab's base query was combined with the filter panel's AND/OR logic, so under OR it was ORed with the filters and the tab showed rows outside it. The base is now always ANDed, matching the histogram. **Behavior change:** pivot tabs combined with OR filters show fewer rows.
+- **Simple-mode CSV export applies the tab base query.** Export from a pivot tab previously ignored the tab's base query. It now matches the grid, including examiner notes handling.
+- **Simple-mode examiner notes respect `source`.** `source = EXAMINER` includes notes. `source = <other>` and `source != EXAMINER` exclude them. `source != <other>` includes them. LIKE on source excludes them. Previously a `source = FILE` pivot or filter still showed examiner notes.
+- **Simple-mode notes under OR.** Compatible filters (datetime, bookmark, tag, color, desc) combine with OR on the examiner notes side. Previously they were ANDed, so `color = RED OR color = BLUE` showed no notes.
+- **Simple-mode notes and tab base queries.** A tab base query on a compatible field (for example a desc pivot) now restricts examiner notes. Previously every note appeared in such a tab.
+- **Schema creation on an existing pre-0.16 table.** Push to PostgreSQL and Create & Connect on a `log2timeline` table written before v0.16.0 now add `import_id` before creating its index. Previously they failed with "column import_id does not exist".
+
+### Internal
+
+- Import provenance migration runs on open and during schema creation. It is automatic and non-destructive. Opening a pre-0.16 database writes the migration, so a read-only pre-0.16 database now fails to open.
+- `import_id` is write-once. The stores reject it as an update target.
+- Single-file and recursive import record the same per-tool format label.
+- File selection is split from import: `SelectImportFile` and `SelectImportFolder` return a path, and `ImportCSV(path, label)` and `ImportFolderRecursive(path, label)` run the import.
+- Simple-mode examiner notes inclusion is decided by one planner, `simpleNotesPlan`, shared by the grid, the count, and the export.
+- The export header and row mapping have one source: `csvparser.ExportHeader` and `csvparser.ExportRow`.
+- Import status constants live in `internal/model`.
+
 ## v0.15.1 (2026-10-07)
 
 ### Bug fixes
