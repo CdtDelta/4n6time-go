@@ -2,6 +2,71 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.16.1 (2026-10-19)
+
+### Bug fixes
+
+- **Push to PostgreSQL copied examiner notes into the evidence table.** Each note was written twice: once to `examiner_notes`, and once to `log2timeline` as an evidence row with a positive id, source EXAMINER, and sourcetype "Examiner Note", where it could be edited like evidence. Push now reads evidence only, and copies notes only to `examiner_notes`.
+
+### Cleaning up databases pushed with v0.16.0 or earlier
+
+**Who needs this:** any PostgreSQL database that received a push from v0.16.0 or earlier while the SQLite database had examiner notes.
+
+**Pushing again is not a fix.** A second push into the same PostgreSQL database duplicates every event, note, and import record (see TODO.md).
+
+Run the steps below against a copy first if you can. The procedure was verified against a 1.5M-event database reproduced with the v0.16.0 binary: after cleanup, event counts and metadata matched a clean v0.16.1 push exactly.
+
+**Step 1: preview.** The count should equal the number of notes you pushed.
+
+```sql
+SELECT count(*) FROM log2timeline l
+WHERE l.source = 'EXAMINER' AND l.sourcetype = 'Examiner Note'
+  AND EXISTS (SELECT 1 FROM examiner_notes n
+              WHERE n.datetime = l.datetime AND n.description = l."desc");
+```
+
+**Step 2: delete the evidence rows.** Run this inside a transaction. Compare the DELETE row count with the step 1 count. If they differ, run `ROLLBACK` and stop; do not run step 3.
+
+```sql
+BEGIN;
+DELETE FROM log2timeline l
+WHERE l.source = 'EXAMINER' AND l.sourcetype = 'Examiner Note'
+  AND EXISTS (SELECT 1 FROM examiner_notes n
+              WHERE n.datetime = l.datetime AND n.description = l."desc");
+```
+
+**Step 3: clean the metadata, then commit.** Run this in the same transaction as step 2.
+
+```sql
+DELETE FROM l2t_sourcetypes s
+  WHERE NOT EXISTS (SELECT 1 FROM log2timeline l WHERE l.sourcetype = s.sourcetype);
+DELETE FROM l2t_sources s
+  WHERE NOT EXISTS (SELECT 1 FROM log2timeline l WHERE l.source = s.source);
+DELETE FROM l2t_colors c
+  WHERE NOT EXISTS (SELECT 1 FROM log2timeline l WHERE l.color = c.color);
+DELETE FROM l2t_tags t
+  WHERE NOT EXISTS (SELECT 1 FROM log2timeline l
+                    WHERE l.tag = t.tag OR l.tag LIKE t.tag || ',%'
+                       OR l.tag LIKE '%,' || t.tag OR l.tag LIKE '%,' || t.tag || ',%');
+UPDATE l2t_sourcetypes s SET frequency = (SELECT count(*) FROM log2timeline l WHERE l.sourcetype = s.sourcetype);
+UPDATE l2t_sources s SET frequency = (SELECT count(*) FROM log2timeline l WHERE l.source = s.source);
+UPDATE l2t_colors c SET frequency = (SELECT count(*) FROM log2timeline l WHERE l.color = c.color);
+COMMIT;
+```
+
+**Review, after the commit.** Do not delete anything based on this query:
+
+```sql
+SELECT count(*) FROM log2timeline WHERE source = 'EXAMINER' AND sourcetype = 'Examiner Note';
+```
+
+A non-zero result can mean either of two things:
+
+- leftover rows whose note was deleted in SQLite after the push
+- genuine rows from re-importing an exported CSV, since the export includes notes
+
+You decide case by case which it is.
+
 ## v0.16.0 (2026-10-19)
 
 ### Features
