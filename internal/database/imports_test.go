@@ -26,15 +26,16 @@ const legacySchemaSQL = `CREATE TABLE log2timeline (
 	bookmark INT DEFAULT 0
 )`
 
-// buildAllEvents runs the query builder with no predicates, which produces the
-// Pattern B SELECT (model.Fields order) that ExecuteQuery expects.
+// buildAllEvents runs the notes-inclusive query builder with no predicates,
+// which produces the Pattern B SELECT (model.Fields order) over evidence and
+// projected examiner notes that ExecuteQuery expects.
 func buildAllEvents(t *testing.T, db interface {
-	ExecuteQuery(string, []interface{}, *NotesFilter) ([]*model.Event, error)
+	ExecuteQuery(string, []interface{}) ([]*model.Event, error)
 }) []*model.Event {
 	t.Helper()
 	q := query.New(0)
-	sqlStr, args := q.Build()
-	events, err := db.ExecuteQuery(sqlStr, args, nil)
+	sqlStr, args := q.BuildCombined()
+	events, err := db.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		t.Fatalf("ExecuteQuery failed: %v", err)
 	}
@@ -318,10 +319,11 @@ func TestExaminerNotesUnionCarriesImportID(t *testing.T) {
 		t.Error("UNION did not include the examiner note")
 	}
 
-	// With a notes filter, the filtered side must still align.
+	// With a WHERE on the combined rows, both sides must still align.
 	q := query.New(0)
-	sqlStr, args := q.Build()
-	filtered, err := db.ExecuteQuery(sqlStr, args, &NotesFilter{SQL: "bookmark = 0"})
+	q.AddPredicate(query.Simple("bookmark", query.Equal, "0"))
+	sqlStr, args := q.BuildCombined()
+	filtered, err := db.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		t.Fatalf("filtered ExecuteQuery failed: %v", err)
 	}
@@ -329,9 +331,9 @@ func TestExaminerNotesUnionCarriesImportID(t *testing.T) {
 		t.Errorf("filtered UNION returned %d rows, want 2", len(filtered))
 	}
 
-	count, err := db.ExecuteCountQuery("SELECT COUNT(rowid) FROM log2timeline", nil, nil)
-	if err != nil || count != 2 {
-		t.Errorf("ExecuteCountQuery = %d, %v; want 2", count, err)
+	// The evidence and projected notes counts add up to both rows.
+	if count := combinedCount(t, db, query.New(0)); count != 2 {
+		t.Errorf("combined count = %d; want 2", count)
 	}
 }
 

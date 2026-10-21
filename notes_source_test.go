@@ -53,9 +53,7 @@ func newNotesSourceApp(t *testing.T) *App {
 // agrees with the rows.
 func gridSplit(t *testing.T, app *App, req QueryRequest) (int, []string) {
 	t.Helper()
-	// The frontend always sends orderBy, and the examiner-notes UNION wrapper
-	// relies on it (a LIMIT with no ORDER BY is not split correctly). Send the
-	// same ordering the frontend does.
+	// Send the same ordering the frontend does.
 	req.OrderBy = "datetime"
 	resp, err := app.QueryEvents(req)
 	if err != nil {
@@ -97,10 +95,10 @@ func TestNotesSourceConditionsSimpleMode(t *testing.T) {
 			QueryRequest{Filters: []FilterItem{{Field: "source", Operator: "!=", Value: "EXAMINER"}}}, 4, nil},
 		{"source != REGISTRY keeps notes",
 			QueryRequest{Filters: []FilterItem{{Field: "source", Operator: "!=", Value: "REGISTRY"}}}, 4, []string{a, b}},
-		{"source LIKE excludes notes",
+		{"source LIKE FILE does not match EXAMINER",
 			QueryRequest{Filters: []FilterItem{{Field: "source", Operator: "LIKE", Value: "FILE"}}}, 3, nil},
-		{"source NOT LIKE excludes notes",
-			QueryRequest{Filters: []FilterItem{{Field: "source", Operator: "NOT LIKE", Value: "FILE"}}}, 1, nil},
+		{"source NOT LIKE FILE keeps notes",
+			QueryRequest{Filters: []FilterItem{{Field: "source", Operator: "NOT LIKE", Value: "FILE"}}}, 1, []string{a, b}},
 		{"OR: source = FILE OR color = RED keeps only note A",
 			QueryRequest{Logic: "OR", Filters: []FilterItem{
 				{Field: "source", Operator: "=", Value: "FILE"},
@@ -129,13 +127,13 @@ func TestNotesSourceConditionsSimpleMode(t *testing.T) {
 			QueryRequest{BookmarkOnly: true, Filters: []FilterItem{{Field: "source", Operator: "=", Value: "EXAMINER"}}}, 0, []string{b}},
 		{"compatible mapping: color = BLUE keeps note B",
 			QueryRequest{Filters: []FilterItem{{Field: "color", Operator: "=", Value: "BLUE"}}}, 0, []string{b}},
-		{"incompatible host filter alone still excludes notes",
+		{"host filter excludes notes (note host is NULL)",
 			QueryRequest{Filters: []FilterItem{{Field: "host", Operator: "=", Value: "WS1"}}}, 3, nil},
-		{"OR with an incompatible term and no satisfied group still excludes notes",
+		{"OR: host = WS1 OR color = RED keeps note A",
 			QueryRequest{Logic: "OR", Filters: []FilterItem{
 				{Field: "host", Operator: "=", Value: "WS1"},
 				{Field: "color", Operator: "=", Value: "RED"},
-			}}, 3, nil},
+			}}, 3, []string{a}},
 	}
 
 	for _, tc := range cases {

@@ -39,10 +39,12 @@ Click "Add Filter" to create a new filter row. Each filter has three parts: a fi
 Import: The field list includes Import, which filters to one imported file or label. Its dropdown lists each import that has events in the current tab, shown as the label and file name. Only equals is available. Events from before v0.16.0 have no import and are not listed.
 
 Filter Logic:
-Use the AND/OR toggle to control how multiple filters combine. AND means all filters must match. OR means any filter can match.
+Use the AND/OR toggle to control how multiple filters combine. AND means all filters must match. OR means any filter can match. The toggle only combines the filter rows: the date range, the keyword search, and the bookmark-only toggle always narrow the results, even under OR.
+
+Examiner notes are filtered by the same rules. See the Examiner Notes section.
 
 Date Range:
-Set a start and end date to limit results to a specific time window. The date range works alongside other filters using AND logic.
+Set both a start and an end date to limit results to a specific time window; the range is applied only when both are set. A date without a time covers the whole day, so an end date of 2025-06-30 includes everything up to 2025-06-30 23:59:59. The date range is always ANDed with your filters, whichever logic you choose. All dates are UTC.
 
 Applying and Clearing:
 Click Apply to run the filters. Click Clear to remove all filters and show all events. The status bar shows how many filters are active.`
@@ -52,11 +54,13 @@ Click Apply to run the filters. Click Clear to remove all filters and show all e
     title: 'Searching',
     content: `The search bar in the toolbar performs a text search across multiple event fields simultaneously.
 
-Type your search term and press Enter or click the Search button. The search looks for matches (case-insensitive, partial match) in these fields: description, filename, source, source type, type, user, host, extra, tag, URL, source name, computer name, format, and notes.
+Type your search term and press Enter or click the Search button. The search looks for partial matches in these fields: description, filename, source, source type, type, user, host, extra, tag, URL, source name, computer name, format, and notes. On SQLite the match ignores case. On PostgreSQL it is case-sensitive.
 
 Matching text is highlighted in the grid and detail panel. Highlight colors adapt to the active theme for optimal readability.
 
-Search works alongside filters. If you have active filters and perform a search, both conditions must be satisfied (AND logic). The status bar shows the active search term.
+Search works alongside filters. If you have active filters and perform a search, both conditions must be satisfied (AND logic), even when the filter logic is OR. The status bar shows the active search term.
+
+Examiner notes: The search applies to examiner notes too. A note matches through its description, tag, source (EXAMINER), or source type (Examiner Note). On SQLite, searching "examiner" or "note" therefore matches every note.
 
 To clear the search, click the "x" button next to the search input.`
   },
@@ -74,6 +78,10 @@ desc LIKE '%malware%' AND host = 'WORKSTATION1'
 datetime BETWEEN '2025-01-01' AND '2025-06-01'
 source = 'WEBHIST' OR source = 'OLECF'
 tag LIKE '%important%'
+
+Dates in a clause: Datetimes are compared exactly as typed, in UTC. A date with no time means midnight at the start of that day, so datetime <= '2025-06-30' stops at 2025-06-30 00:00:00 and leaves out the rest of the 30th. Write datetime <= '2025-06-30 23:59:59' or datetime < '2025-07-01' to include the whole day. The simple-mode date range, by contrast, includes the whole end day.
+
+Examiner notes: Every condition in the clause applies to examiner notes as well, exactly as it does to timeline events. Each note acts as a row with source EXAMINER, source type Examiner Note, its description as desc, its own datetime, tag, color, and bookmark, and every other field empty. A condition on an empty field is not true for a note, so host = 'WS1' leaves notes out, while host = 'WS1' OR color = 'RED' includes red notes. Use source = 'EXAMINER' or sourcetype = 'Examiner Note' to select only notes. Comparisons with = are case-sensitive, so source = 'examiner' matches no note.
 
 Field reference: Click the ? button next to the search bar to see all 30 available field names and supported operators (=, !=, LIKE, NOT LIKE, >, <, >=, <=, AND, OR, BETWEEN, IN).
 
@@ -110,7 +118,14 @@ Clicking a bar in the histogram sets the date range filter to that time period a
 
 In advanced search (SQL) mode, the histogram shows the distribution for the WHERE clause (and the tab's base query) only, matching the grid. Click and drag-to-select are disabled there because the date range filter does not apply; add a datetime condition to the clause instead.
 
-Hovering over a bar shows the time period and event count.`
+Hovering over a bar shows the time period, the event count, and the number of examiner notes in that period.
+
+Examiner notes lane: A strip below the bars shows a marker in each time slot that contains examiner notes. The marker shows where notes are, not how many; hover over it for the counts. Notes never add to the bar heights, which count timeline events only. Clicking a marker sets the date range to that slot, like clicking a bar (simple mode only).
+
+Which notes are drawn: The histogram applies your filters and search to notes the same way the grid does. The chart's span then decides which matching notes appear in the lane:
+- With a date range set, the chart covers that range and shows every matching note in it.
+- With no date range, the chart covers the span of the matching events. Notes outside that span are listed in the grid but not drawn.
+- When the filters match only notes and no events, the chart covers the span of those notes.`
   },
   {
     id: 'saved-queries',
@@ -184,9 +199,11 @@ Color-tagged events appear with a colored left border and subtle background tint
     title: 'Examiner Notes',
     content: `Examiner notes let you add your own timestamped investigation notes directly into the timeline grid alongside evidence events.
 
-Adding a note: Click the + button in the toolbar to open the Add Note dialog. Enter a date and time for the note (click "Now" to use the current time), a description, and an optional tag. The tag "examiner_entry" is always included automatically. Click Add Note to create it.
+Adding a note: Click the + button in the toolbar to open the Add Note dialog. Enter a date and time for the note and a description, then click Add Note to create it.
 
-How notes appear: Examiner notes appear in the main event grid with source "EXAMINER" and source type "Examiner Note". They are interleaved with evidence events by datetime, so they appear in chronological context. Notes use negative IDs internally to distinguish them from evidence events.
+Date and time: The date and time are UTC. Type them as YYYY-MM-DD HH:MM:SS, for example 2009-07-14 04:58:36, or paste a timestamp copied from the grid, such as 2009-07-14T04:58:36Z. Time zone offsets (such as +05:00) are rejected rather than converted, and so are fractional seconds, a date without a time, and dates that do not exist (such as 2025-02-31). Notes are stored in the standard YYYY-MM-DD HH:MM:SS form whichever way you entered them.
+
+How notes appear: Examiner notes appear in the main event grid with source "EXAMINER" and source type "Examiner Note". They are interleaved with evidence events by datetime, so they appear in chronological context. Notes use negative IDs internally to distinguish them from evidence events. In the timeline histogram, notes appear in their own lane below the bars (see Timeline Histogram).
 
 Editing notes: Examiner notes are immutable after creation. You can change the color and toggle the bookmark, but you cannot edit the description, tag, or datetime. To correct a note, delete it and create a new one.
 
@@ -194,7 +211,13 @@ Deleting notes: Select an examiner note in the grid to open it in the detail pan
 
 Color coding and bookmarks: You can assign a color to an examiner note using the color picker in the detail panel, and toggle its bookmark star. Colors and bookmarks work the same as for evidence events.
 
-Filtering: In simple mode, the source filter decides whether notes appear. source = EXAMINER shows only notes, and source != EXAMINER hides them. source = or != with any other value hides or shows notes just as it does for evidence: source = FILE hides notes, and source != REGISTRY keeps them. A LIKE condition on source hides notes. Color, bookmark, tag, description, and date conditions also apply to notes, so a note must match them to appear. Under OR logic these are combined with OR, as they are for evidence. Host, user, filename, sourcetype, and import conditions hide notes, except under OR logic where a source = EXAMINER term is also in the group: that term shows every note. A pivot tab on a description, tag, color, date, or bookmark field shows only the notes that match it. In advanced search, source conditions written with IN or LIKE also exclude examiner notes; write source = 'EXAMINER' to include them.`
+Filtering: Examiner notes filter exactly like timeline events, in simple and advanced mode, in the grid, the count, the export, and the histogram. Each note acts as a row with source EXAMINER, source type Examiner Note, its description as desc, its own datetime, tag, color, and bookmark, and every other field empty.
+- To show only notes, filter on source = EXAMINER or source type = Examiner Note. To hide them, use source != EXAMINER.
+- A condition on a field notes do not have (host, user, filename, import, and so on) is never true for a note, so under AND it hides notes. Under OR, a note still appears when another condition matches it: host = WS1 OR color = RED shows red notes.
+- Source conditions treat EXAMINER like any other value. source = FILE hides notes, source LIKE EXAM shows them, and source = examiner (lowercase) does not match them, because = is case-sensitive.
+- Keyword search, the date range, bookmark-only, and a pivot tab's base query apply to notes as they do to events.
+
+Dates: Note times are UTC and display as UTC in the grid and export, in the form 2025-01-10T10:00:00Z.`
   },
   {
     id: 'bulk-editing',
@@ -261,6 +284,8 @@ In simple mode, the export respects your current filters, search, date range, bo
 In advanced search (SQL) mode, the export contains exactly the rows shown in the grid: the same WHERE clause, the same tab base query, and the same examiner notes.
 
 Each row ends with an import_file column that names the file the event came from. It is empty for events from before v0.16.0.
+
+Dates are exported as UTC, in the form 2025-01-10T10:00:00Z, the same as the grid shows them.
 
 You will be prompted to choose a filename and location for the exported CSV file.`
   },

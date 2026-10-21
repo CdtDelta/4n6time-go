@@ -106,29 +106,3 @@ func TestSimpleExportDescBaseMatchesGrid(t *testing.T) {
 		t.Errorf("grid total under desc base = %d, want 3 (1 evidence + 2 notes)", total)
 	}
 }
-
-// The notes-side base condition must number its placeholders after the bookmark
-// term and before the filter group, with arguments in the same order, so that
-// PostgreSQL $N values line up with the args.
-func TestNotesBaseConditionPostgresPlaceholders(t *testing.T) {
-	pg := &database.PostgresDialect{}
-	req := QueryRequest{
-		BaseField: "desc", BaseOp: "LIKE", BaseValue: "malware",
-		Logic: "OR",
-		Filters: []FilterItem{
-			{Field: "color", Operator: "=", Value: "BLUE"},
-		},
-	}
-	// startIdx 4 means the main query used three placeholders.
-	exclude, nf := simpleNotesPlan(req, pg, 4)
-	if exclude || nf == nil {
-		t.Fatalf("simpleNotesPlan = exclude %v, filter %+v; want a notes filter", exclude, nf)
-	}
-	wantSQL := "description LIKE $4 AND (color = $5)"
-	if nf.SQL != wantSQL {
-		t.Errorf("SQL = %q, want %q", nf.SQL, wantSQL)
-	}
-	if len(nf.Args) != 2 || nf.Args[0] != "%malware%" || nf.Args[1] != "BLUE" {
-		t.Errorf("Args = %#v, want [%%malware%% BLUE]", nf.Args)
-	}
-}

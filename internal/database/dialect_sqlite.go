@@ -1,6 +1,10 @@
 package database
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/cdtdelta/4n6time/internal/query"
+)
 
 // SQLiteDialect implements the Dialect interface for SQLite databases.
 // It also satisfies query.QueryDialect through structural typing.
@@ -14,6 +18,10 @@ func (d *SQLiteDialect) QuoteColumn(name string) string  { return name }
 
 func (d *SQLiteDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 	return "(datetime BETWEEN datetime(?) AND datetime(?))"
+}
+
+func (d *SQLiteDialect) NoteDatetimeSQL(column string) string {
+	return query.SQLiteNoteDatetime(column)
 }
 
 func (d *SQLiteDialect) DateFormatSQL(column, format string) string {

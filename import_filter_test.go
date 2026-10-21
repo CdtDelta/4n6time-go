@@ -198,11 +198,6 @@ func TestImportFilterExcludesNotesEvenAlongsideCompatibleFilters(t *testing.T) {
 			t.Errorf("examiner note %d returned", e.ID)
 		}
 	}
-	// On its own, the import filter gives buildNotesFilter nothing to map.
-	importOnly := QueryRequest{Filters: []FilterItem{{Field: "import_id", Operator: "=", Value: itoa(fx.idA)}}}
-	if notes := buildNotesFilter(importOnly, fx.app.queryDialect(), 1); notes != nil {
-		t.Errorf("buildNotesFilter with only an import filter = %+v, want nil", notes)
-	}
 }
 
 func TestImportFilterBaseQueryRules(t *testing.T) {

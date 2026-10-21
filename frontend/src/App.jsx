@@ -343,12 +343,11 @@ function App() {
       req.filters = fs.filters || []
       req.logic = fs.logic || 'AND'
 
+      // The date range is sent as its own fields, which the backend ANDs
+      // outside the filter group's AND/OR logic.
       if (fs.dateFrom && fs.dateTo) {
-        req.filters = [
-          ...req.filters,
-          { field: 'datetime', operator: '>=', value: fs.dateFrom },
-          { field: 'datetime', operator: '<=', value: fs.dateTo },
-        ]
+        req.dateFrom = fs.dateFrom
+        req.dateTo = fs.dateTo
       }
     }
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/cdtdelta/4n6time/internal/model"
+	"github.com/cdtdelta/4n6time/internal/query"
 )
 
 func tempDBPath(t *testing.T) string {
@@ -504,7 +505,7 @@ func TestGetTimelineHistogramFiltered(t *testing.T) {
 	}
 
 	// Unfiltered: all three events should produce buckets
-	all, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01'", nil)
+	all, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01'", nil, nil)
 	if err != nil {
 		t.Fatalf("GetTimelineHistogram (unfiltered) failed: %v", err)
 	}
@@ -517,7 +518,7 @@ func TestGetTimelineHistogramFiltered(t *testing.T) {
 	}
 
 	// Filtered by source=FILE: only 2 events should appear
-	filtered, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND source = ?", []interface{}{"FILE"})
+	filtered, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND source = ?", []interface{}{"FILE"}, nil)
 	if err != nil {
 		t.Fatalf("GetTimelineHistogram (filtered) failed: %v", err)
 	}
@@ -543,7 +544,7 @@ func TestGetTimelineHistogramBookmark(t *testing.T) {
 	}
 
 	// Bookmark-only: should see only 2 bookmarked events
-	bookmarked, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND bookmark = 1", nil)
+	bookmarked, err := db.GetTimelineHistogram("WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND bookmark = 1", nil, nil)
 	if err != nil {
 		t.Fatalf("GetTimelineHistogram (bookmark) failed: %v", err)
 	}
@@ -556,8 +557,25 @@ func TestGetTimelineHistogramBookmark(t *testing.T) {
 	}
 }
 
-// TestExaminerNotesBookmarkFilter verifies that a bookmark-only NotesFilter applied
-// via ExecuteCountQuery excludes unbookmarked examiner notes from the UNION count.
+// combinedCount returns the evidence count plus the projected notes count for
+// q, the way App.countCombined adds them.
+func combinedCount(t *testing.T, db *SQLiteStore, q *query.Query) int64 {
+	t.Helper()
+	evSQL, evArgs := q.BuildCount()
+	evidence, err := db.ExecuteCountQuery(evSQL, evArgs)
+	if err != nil {
+		t.Fatalf("evidence count failed: %v", err)
+	}
+	notesSQL, notesArgs := q.BuildNotesCount()
+	notes, err := db.ExecuteCountQuery(notesSQL, notesArgs)
+	if err != nil {
+		t.Fatalf("notes count failed: %v", err)
+	}
+	return evidence + notes
+}
+
+// TestExaminerNotesBookmarkFilter verifies that a bookmark condition applies
+// to evidence and projected examiner notes alike.
 func TestExaminerNotesBookmarkFilter(t *testing.T) {
 	db := createTestDB(t)
 
@@ -581,30 +599,21 @@ func TestExaminerNotesBookmarkFilter(t *testing.T) {
 		t.Fatalf("ToggleExaminerNoteBookmark failed: %v", err)
 	}
 
-	countSQL := "SELECT COUNT(rowid) FROM log2timeline"
-
-	// Without notes filter: 2 events + 2 notes = 4.
-	total, err := db.ExecuteCountQuery(countSQL, nil, nil)
-	if err != nil {
-		t.Fatalf("ExecuteCountQuery (no filter) failed: %v", err)
-	}
-	if total != 4 {
+	// Without a filter: 2 events + 2 notes = 4.
+	if total := combinedCount(t, db, query.New(0)); total != 4 {
 		t.Errorf("expected 4 without filter, got %d", total)
 	}
 
-	// With bookmark notes filter: 2 events + 1 bookmarked note = 3.
-	bookmarkFilter := &NotesFilter{SQL: "bookmark = ?", Args: []interface{}{int64(1)}}
-	filtered, err := db.ExecuteCountQuery(countSQL, nil, bookmarkFilter)
-	if err != nil {
-		t.Fatalf("ExecuteCountQuery (bookmark filter) failed: %v", err)
-	}
-	if filtered != 3 {
-		t.Errorf("expected 3 with bookmark filter (2 events + 1 note), got %d", filtered)
+	// Bookmark-only: neither event is bookmarked, so only the bookmarked note.
+	q := query.New(0)
+	q.AddConstraint(query.Simple("bookmark", query.Equal, "1"))
+	if filtered := combinedCount(t, db, q); filtered != 1 {
+		t.Errorf("expected 1 with bookmark filter (0 events + 1 note), got %d", filtered)
 	}
 }
 
-// TestExaminerNotesDateRangeFilter verifies that a datetime NotesFilter applied
-// via ExecuteCountQuery excludes examiner notes outside the date range.
+// TestExaminerNotesDateRangeFilter verifies that a date range applies to
+// evidence and projected examiner notes alike.
 func TestExaminerNotesDateRangeFilter(t *testing.T) {
 	db := createTestDB(t)
 
@@ -623,27 +632,16 @@ func TestExaminerNotesDateRangeFilter(t *testing.T) {
 		t.Fatalf("InsertExaminerNote (outside) failed: %v", err)
 	}
 
-	countSQL := "SELECT COUNT(rowid) FROM log2timeline"
-
-	// Without filter: 1 event + 2 notes = 3.
-	total, err := db.ExecuteCountQuery(countSQL, nil, nil)
-	if err != nil {
-		t.Fatalf("ExecuteCountQuery (no filter) failed: %v", err)
-	}
-	if total != 3 {
+	// Without a filter: 1 event + 2 notes = 3.
+	if total := combinedCount(t, db, query.New(0)); total != 3 {
 		t.Errorf("expected 3 without filter, got %d", total)
 	}
 
-	// With date range filter covering May only: 1 event + 1 in-range note = 2.
-	dateFilter := &NotesFilter{
-		SQL:  "datetime >= ? AND datetime <= ?",
-		Args: []interface{}{"2025-05-01 00:00:00", "2025-05-31 23:59:59"},
-	}
-	filtered, err := db.ExecuteCountQuery(countSQL, nil, dateFilter)
-	if err != nil {
-		t.Fatalf("ExecuteCountQuery (date filter) failed: %v", err)
-	}
-	if filtered != 2 {
+	// Date range covering May only: 1 event + 1 in-range note = 2.
+	q := query.New(0)
+	q.AddConstraint(query.Simple("datetime", query.GreaterOrEqual, "2025-05-01 00:00:00"))
+	q.AddConstraint(query.Simple("datetime", query.LessOrEqual, "2025-05-31 23:59:59"))
+	if filtered := combinedCount(t, db, q); filtered != 2 {
 		t.Errorf("expected 2 with date filter (1 event + 1 in-range note), got %d", filtered)
 	}
 }
@@ -666,7 +664,7 @@ func TestGetTimelineHistogramRawWhere(t *testing.T) {
 	// Simulate the WHERE clause that app.go builds when SearchMode == "advanced"
 	// and SearchText is "host = 'HOST-A'": the raw fragment is injected directly.
 	rawWhere := "WHERE datetime > '1970-01-01' AND datetime < '2100-01-01' AND (host = 'HOST-A')"
-	buckets, err := db.GetTimelineHistogram(rawWhere, nil)
+	buckets, err := db.GetTimelineHistogram(rawWhere, nil, nil)
 	if err != nil {
 		t.Fatalf("GetTimelineHistogram with raw where failed: %v", err)
 	}
@@ -676,55 +674,5 @@ func TestGetTimelineHistogramRawWhere(t *testing.T) {
 	}
 	if total != 2 {
 		t.Errorf("expected 2 events matching host=HOST-A, got %d", total)
-	}
-}
-
-func TestShouldIncludeExaminerNotes(t *testing.T) {
-	tests := []struct {
-		name string
-		sql  string
-		want bool
-	}{
-		// Comment marker check runs before anything else.
-		{"no-notes marker", "/* no-notes */ SELECT * FROM log2timeline WHERE source = 'EXAMINER'", false},
-
-		// Rule 1: any source = 'EXAMINER' includes.
-		{"rule 1 eq examiner", "SELECT * FROM log2timeline WHERE source = 'EXAMINER'", true},
-		{"rule 1 eq examiner case-insensitive", "SELECT * FROM log2timeline WHERE SOURCE = 'examiner'", true},
-		{"rule 1 beats eq other", "SELECT * FROM log2timeline WHERE source = 'FILE' OR source = 'EXAMINER'", true},
-		{"rule 1 beats ne examiner", "SELECT * FROM log2timeline WHERE source = 'EXAMINER' OR source != 'EXAMINER'", true},
-
-		// Rule 2: else any source = '<other>' excludes.
-		{"rule 2 eq other", "SELECT * FROM log2timeline WHERE source = 'FILE'", false},
-		{"rule 2 beats ne other (AND regression)", "SELECT * FROM log2timeline WHERE source = 'FILE' AND source != 'REGISTRY'", false},
-		{"rule 2 beats ne other with <>", "SELECT * FROM log2timeline WHERE source = 'FILE' AND source <> 'REGISTRY'", false},
-
-		// Rule 3: else any source != / <> 'EXAMINER' excludes.
-		{"rule 3 ne examiner", "SELECT * FROM log2timeline WHERE source != 'EXAMINER'", false},
-		{"rule 3 ltgt examiner", "SELECT * FROM log2timeline WHERE source <> 'EXAMINER'", false},
-		{"rule 3 beats ne other", "SELECT * FROM log2timeline WHERE source != 'REGISTRY' AND source != 'EXAMINER'", false},
-
-		// Rule 4: else any source != / <> '<other>' includes.
-		{"rule 4 ne other", "SELECT * FROM log2timeline WHERE source != 'REGISTRY'", true},
-		{"rule 4 ltgt other", "SELECT * FROM log2timeline WHERE source <> 'REGISTRY'", true},
-
-		// Rule 5: else ambiguous IN / LIKE forms exclude (fail closed).
-		{"rule 5 in-list containing examiner", "SELECT * FROM log2timeline WHERE source IN ('EXAMINER','FILE')", false},
-		{"rule 5 not in", "SELECT * FROM log2timeline WHERE source NOT IN ('FILE')", false},
-		{"rule 5 like", "SELECT * FROM log2timeline WHERE source LIKE 'EXAM%'", false},
-		{"rule 5 not like", "SELECT * FROM log2timeline WHERE source NOT LIKE 'FILE%'", false},
-
-		// Rule 6: no literal source filter includes.
-		{"rule 6 no source filter", "SELECT * FROM log2timeline WHERE host = 'WS1'", true},
-		{"rule 6 parameterized source", "SELECT * FROM log2timeline WHERE source = ?", true},
-		{"rule 6 sourcetype is not source", "SELECT * FROM log2timeline WHERE sourcetype = 'Registry Key'", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldIncludeExaminerNotes(tt.sql); got != tt.want {
-				t.Errorf("shouldIncludeExaminerNotes(%q) = %v, want %v", tt.sql, got, tt.want)
-			}
-		})
 	}
 }

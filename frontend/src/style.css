@@ -1252,6 +1252,17 @@ html, body, #root {
   padding: 6px 10px;
 }
 
+/* The plot wrapper anchors the examiner-notes lane tooltip, which is placed in
+   chart coordinates because the lane sits outside the Recharts tooltip area. */
+.timeline-plot { position: relative; }
+
+.timeline-lane-tooltip {
+  position: absolute;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 10;
+}
+
 .timeline-tooltip-label { font-size: 11px; color: var(--text-muted); margin-bottom: 2px; }
 .timeline-tooltip-value { font-size: 12px; color: var(--text-primary); font-weight: 600; }
 

@@ -485,6 +485,105 @@ func basePredicate(req QueryRequest) (*query.Predicate, error) {
 	return query.Simple(req.BaseField, op, req.BaseValue), nil
 }
 
+// keywordSearchFields are the columns simple-mode keyword search matches with
+// LIKE, ORed together. Names use the model.Fields spelling (URL, not url):
+// query.Simple drops any other name, which silently removes the column.
+var keywordSearchFields = []string{
+	"desc", "filename", "source", "sourcetype", "type",
+	"user", "host", "extra", "tag", "URL", "source_name",
+	"computer_name", "format", "notes",
+}
+
+// buildSimpleQuery builds the simple-mode query for req, shared by the grid,
+// the count, and the simple export:
+//
+//	<base> AND (<filters joined by req.Logic>) AND <keyword> AND <bookmark-only> AND <date range>
+//
+// Keyword search, bookmark-only, and the date range are constraints, never
+// members of the filter group, so OR logic cannot widen them. The caller sets
+// the order and page.
+func buildSimpleQuery(req QueryRequest, d query.QueryDialect, pageSize int) (*query.Query, error) {
+	q := query.New(pageSize)
+	q.SetDialect(d)
+	if req.Logic == "OR" {
+		q.SetLogic(query.OR)
+	}
+
+	for _, f := range req.Filters {
+		if f.Field == importIDField {
+			p, err := importIDPredicate(f.Operator, f.Value)
+			if err != nil {
+				return nil, err
+			}
+			q.AddPredicate(p)
+			continue
+		}
+		var op query.Operator
+		switch f.Operator {
+		case "=":
+			op = query.Equal
+		case "!=":
+			op = query.NotEqual
+		case "LIKE":
+			op = query.Like
+		case "NOT LIKE":
+			op = query.NotLike
+		case ">=":
+			op = query.GreaterOrEqual
+		case "<=":
+			op = query.LessOrEqual
+		default:
+			continue
+		}
+		// Normalize partial dates for datetime fields
+		val := f.Value
+		if f.Field == "datetime" {
+			val = normalizeDate(val, op == query.LessOrEqual)
+		}
+		q.AddPredicate(query.Simple(f.Field, op, val))
+	}
+
+	if req.SearchText != "" {
+		var searchPreds []*query.Predicate
+		for _, field := range keywordSearchFields {
+			searchPreds = append(searchPreds, query.Simple(field, query.Like, req.SearchText))
+		}
+		q.AddConstraint(query.Combine(searchPreds, query.OR))
+	}
+	if req.BookmarkOnly {
+		q.AddConstraint(query.Simple("bookmark", query.Equal, "1"))
+	}
+	if req.DateFrom != "" {
+		q.AddConstraint(query.Simple("datetime", query.GreaterOrEqual, normalizeDate(req.DateFrom, false)))
+	}
+	if req.DateTo != "" {
+		q.AddConstraint(query.Simple("datetime", query.LessOrEqual, normalizeDate(req.DateTo, true)))
+	}
+
+	// Tab base query: ANDed with the whole filter set, outside its AND/OR logic.
+	base, err := basePredicate(req)
+	if err != nil {
+		return nil, err
+	}
+	q.SetBase(base)
+	return q, nil
+}
+
+// countCombined returns the evidence count plus the examiner notes count for
+// one WHERE. Counting the two halves separately keeps the evidence count on a
+// covering index where one applies; a count over the UNION would lose it.
+func (a *App) countCombined(evidenceSQL string, evidenceArgs []interface{}, notesSQL string, notesArgs []interface{}) (int64, error) {
+	evidence, err := a.store.ExecuteCountQuery(evidenceSQL, evidenceArgs)
+	if err != nil {
+		return 0, fmt.Errorf("counting evidence: %w", err)
+	}
+	notes, err := a.store.ExecuteCountQuery(notesSQL, notesArgs)
+	if err != nil {
+		return 0, fmt.Errorf("counting examiner notes: %w", err)
+	}
+	return evidence + notes, nil
+}
+
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
 	Filters    []FilterItem `json:"filters"`
@@ -500,6 +599,11 @@ type QueryRequest struct {
 	BaseField string `json:"baseField"`
 	BaseOp    string `json:"baseOp"`
 	BaseValue string `json:"baseValue"`
+	// DateFrom/DateTo: optional simple-mode date range, normalized with
+	// normalizeDate (DateTo to the end of its period) and ANDed outside the
+	// filter group. Datetime rows in Filters stay ordinary filters.
+	DateFrom string `json:"dateFrom"`
+	DateTo   string `json:"dateTo"`
 }
 
 type FilterItem struct {
@@ -525,117 +629,31 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 		pageSize = 1000
 	}
 
-	q := query.New(pageSize)
-	d := a.queryDialect()
-	q.SetDialect(d)
-
-	// Set logic
-	if req.Logic == "OR" {
-		q.SetLogic(query.OR)
-	}
-
-	// Add filters
-	for _, f := range req.Filters {
-		if f.Field == importIDField {
-			p, err := importIDPredicate(f.Operator, f.Value)
-			if err != nil {
-				return nil, err
-			}
-			q.AddPredicate(p)
-			continue
-		}
-		// Handle date range comparisons directly via SQL
-		// since the query builder's Simple predicate handles these
-		var op query.Operator
-		switch f.Operator {
-		case "=":
-			op = query.Equal
-		case "!=":
-			op = query.NotEqual
-		case "LIKE":
-			op = query.Like
-		case "NOT LIKE":
-			op = query.NotLike
-		case ">=":
-			op = query.GreaterOrEqual
-		case "<=":
-			op = query.LessOrEqual
-		default:
-			continue
-		}
-		// Normalize partial dates for datetime fields
-		val := f.Value
-		if f.Field == "datetime" {
-			val = normalizeDate(val, op == query.LessOrEqual)
-		}
-		p := query.Simple(f.Field, op, val)
-		q.AddPredicate(p)
-	}
-
-	// Full-text search across key columns
-	if req.SearchText != "" {
-		searchFields := []string{
-			"desc", "filename", "source", "sourcetype", "type",
-			"user", "host", "extra", "tag", "url", "source_name",
-			"computer_name", "format", "notes",
-		}
-		var searchPreds []*query.Predicate
-		for _, field := range searchFields {
-			p := query.Simple(field, query.Like, req.SearchText)
-			if p != nil {
-				searchPreds = append(searchPreds, p)
-			}
-		}
-		if len(searchPreds) > 0 {
-			combined := query.Combine(searchPreds, query.OR)
-			q.AddPredicate(combined)
-		}
-	}
-
-	// Bookmark filter
-	if req.BookmarkOnly {
-		p := query.Simple("bookmark", query.Equal, "1")
-		q.AddPredicate(p)
-	}
-
-	// Tab base query: ANDed with the whole filter set, outside its AND/OR logic.
-	base, err := basePredicate(req)
+	q, err := buildSimpleQuery(req, a.queryDialect(), pageSize)
 	if err != nil {
 		return nil, err
 	}
-	q.SetBase(base)
-
-	// Order by
 	if req.OrderBy != "" {
 		q.OrderBy(req.OrderBy)
 	}
-
-	// Page
 	page := req.Page
 	if page < 1 {
 		page = 1
 	}
 	q.SetPage(page)
 
-	// Build and execute
-	sqlStr, args := q.Build()
+	sqlStr, args := q.BuildCombined()
 	countSQL, countArgs := q.BuildCount()
+	notesCountSQL, notesCountArgs := q.BuildNotesCount()
 
-	// Examiner notes: simpleNotesPlan decides whether notes can appear and which
-	// condition selects them. The simple-mode export uses the same plan.
-	excludeNotes, notesFilter := simpleNotesPlan(req, d, len(args)+1)
-
-	// Inject hint so wrapWithExaminerNotesUnion skips the UNION.
-	if excludeNotes {
-		sqlStr = "/* no-notes */ " + sqlStr
-		countSQL = "/* no-notes */ " + countSQL
+	// A failed count leaves the total at 0 rather than failing the page, as before.
+	totalCount, err := a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
+	if err != nil {
+		a.logError("Query count error: " + err.Error())
+		totalCount = 0
 	}
 
-	// Get total count (ignore error to preserve existing behavior: count stays 0 on failure)
-	totalCount, _ := a.store.ExecuteCountQuery(countSQL, countArgs, notesFilter)
-
-	// Get events
-	events, err := a.store.ExecuteQuery(sqlStr, args, notesFilter)
+	events, err := a.store.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		a.logError("Query error: " + err.Error())
 		return nil, fmt.Errorf("querying events: %w", err)
@@ -666,16 +684,17 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 	if err != nil {
 		return nil, err
 	}
-	sqlStr, args := rq.Build()
+	sqlStr, args := rq.BuildCombined()
 	countSQL, countArgs := rq.BuildCount()
+	notesCountSQL, notesCountArgs := rq.BuildNotesCount()
 
-	totalCount, err := a.store.ExecuteCountQuery(countSQL, countArgs, nil)
+	totalCount, err := a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
 	if err != nil {
 		a.logError("Advanced search count error: " + err.Error())
 		return nil, fmt.Errorf("count query error: %w", err)
 	}
 
-	events, err := a.store.ExecuteQuery(sqlStr, args, nil)
+	events, err := a.store.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		a.logError("Advanced search error: " + err.Error())
 		return nil, fmt.Errorf("query error: %w", err)
@@ -691,9 +710,8 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 
 // buildAdvancedQuery validates a raw advanced-search WHERE clause and builds
 // the query that runs it. AdvancedSearch and ExportCSV share this so the
-// exported rows always match the grid. The examiner notes UNION is not
-// decided here: callers pass a nil NotesFilter to ExecuteQuery, and the store
-// applies shouldIncludeExaminerNotes to the built SQL.
+// exported rows always match the grid. Callers use BuildCombined, so the
+// clause applies to evidence and projected examiner notes alike.
 func (a *App) buildAdvancedQuery(whereClause string, pageSize, page int) (*query.RawQuery, error) {
 	if err := query.ValidateRawWhere(whereClause); err != nil {
 		return nil, err
@@ -878,7 +896,6 @@ func isAdvancedSearch(req QueryRequest) bool {
 func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)) (string, error) {
 	var sqlStr string
 	var args []interface{}
-	var notesFilter *database.NotesFilter
 
 	if isAdvancedSearch(req) {
 		if err := query.ValidateRawWhere(req.SearchText); err != nil {
@@ -892,12 +909,10 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 		if err != nil {
 			return "", err
 		}
-		// AdvancedSearch passes a nil NotesFilter; the store decides the
-		// examiner notes UNION from the SQL text alone.
-		sqlStr, args = rq.Build()
+		sqlStr, args = rq.BuildCombined()
 	} else {
 		var err error
-		sqlStr, args, notesFilter, err = a.buildSimpleExportQuery(req)
+		sqlStr, args, err = a.buildSimpleExportQuery(req)
 		if err != nil {
 			return "", err
 		}
@@ -905,7 +920,7 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 
 	status("Querying events...")
 
-	events, err := a.store.ExecuteQuery(sqlStr, args, notesFilter)
+	events, err := a.store.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		return "", fmt.Errorf("querying events: %w", err)
 	}
@@ -927,100 +942,22 @@ func (a *App) exportCSVTo(savePath string, req QueryRequest, status func(string)
 	return fmt.Sprintf("Exported %d events to %s", len(events), savePath), nil
 }
 
-// buildSimpleExportQuery builds the keyword/filter export query and its
-// examiner notes filter. Behavior is unchanged from the original inline
-// ExportCSV construction.
-func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, *database.NotesFilter, error) {
-	// Build query without pagination to get all matching events
-	q := query.New(exportPageSize)
-	q.SetDialect(a.queryDialect())
-
-	// Tab base query, applied exactly as QueryEvents applies it.
-	base, err := basePredicate(req)
+// buildSimpleExportQuery builds the simple-mode export query: the grid's
+// query (buildSimpleQuery) with no pagination, ordered by datetime unless the
+// request names an order.
+func (a *App) buildSimpleExportQuery(req QueryRequest) (string, []interface{}, error) {
+	q, err := buildSimpleQuery(req, a.queryDialect(), exportPageSize)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, err
 	}
-	q.SetBase(base)
-
-	if req.Logic == "OR" {
-		q.SetLogic(query.OR)
-	}
-
-	for _, f := range req.Filters {
-		if f.Field == importIDField {
-			p, err := importIDPredicate(f.Operator, f.Value)
-			if err != nil {
-				return "", nil, nil, err
-			}
-			q.AddPredicate(p)
-			continue
-		}
-		var op query.Operator
-		switch f.Operator {
-		case "=":
-			op = query.Equal
-		case "!=":
-			op = query.NotEqual
-		case "LIKE":
-			op = query.Like
-		case "NOT LIKE":
-			op = query.NotLike
-		case ">=":
-			op = query.GreaterOrEqual
-		case "<=":
-			op = query.LessOrEqual
-		default:
-			continue
-		}
-		// Normalize partial dates for datetime fields
-		val := f.Value
-		if f.Field == "datetime" {
-			val = normalizeDate(val, op == query.LessOrEqual)
-		}
-		q.AddPredicate(query.Simple(f.Field, op, val))
-	}
-
-	// Full-text search across key columns
-	if req.SearchText != "" {
-		searchFields := []string{
-			"desc", "filename", "source", "sourcetype", "type",
-			"user", "host", "extra", "tag", "url", "source_name",
-			"computer_name", "format", "notes",
-		}
-		var searchPreds []*query.Predicate
-		for _, field := range searchFields {
-			p := query.Simple(field, query.Like, req.SearchText)
-			if p != nil {
-				searchPreds = append(searchPreds, p)
-			}
-		}
-		if len(searchPreds) > 0 {
-			combined := query.Combine(searchPreds, query.OR)
-			q.AddPredicate(combined)
-		}
-	}
-
-	// Bookmark filter
-	if req.BookmarkOnly {
-		p := query.Simple("bookmark", query.Equal, "1")
-		q.AddPredicate(p)
-	}
-
 	orderBy := req.OrderBy
 	if orderBy == "" {
 		orderBy = "datetime"
 	}
 	q.OrderBy(orderBy)
 	q.SetPage(1)
-
-	sqlStr, args := q.Build()
-
-	// Examiner notes: the same plan as the grid, so the export matches it.
-	excludeExportNotes, exportNotesFilter := simpleNotesPlan(req, a.queryDialect(), len(args)+1)
-	if excludeExportNotes {
-		sqlStr = "/* no-notes */ " + sqlStr
-	}
-	return sqlStr, args, exportNotesFilter, nil
+	sqlStr, args := q.BuildCombined()
+	return sqlStr, args, nil
 }
 
 // -- Metadata Operations --
@@ -1034,14 +971,6 @@ func (a *App) GetDistinctValues(field string) (map[string]int64, error) {
 		return a.store.GetDistinctValuesFiltered(field, importIDNotNull, nil)
 	}
 	return a.store.GetDistinctValues(field)
-}
-
-// buildNotesFilter returns the examiner notes condition for req, or nil when no
-// condition applies. It is simpleNotesPlan without the exclusion flag; code
-// that needs to know whether notes are excluded calls simpleNotesPlan.
-func buildNotesFilter(req QueryRequest, d query.QueryDialect, startIdx int) *database.NotesFilter {
-	_, notes := simpleNotesPlan(req, d, startIdx)
-	return notes
 }
 
 // buildBaseWhere constructs the WHERE clause and argument for a single base query predicate.
@@ -1140,136 +1069,66 @@ func (a *App) GetMinMaxDate() ([]string, error) {
 	return []string{min, max}, nil
 }
 
-// TimelineBucket represents a single histogram bucket.
+// TimelineBucket represents a single histogram bucket. Count is evidence only,
+// which is what TimelineChart renders; NotesCount is examiner notes only.
 type TimelineBucket struct {
-	Timestamp string `json:"timestamp"`
-	Count     int64  `json:"count"`
+	Timestamp  string `json:"timestamp"`
+	Count      int64  `json:"count"`
+	NotesCount int64  `json:"notesCount"`
 }
 
-// GetTimelineHistogram returns event counts bucketed by time interval.
-// The bucket size is automatically chosen based on the date range.
+// histogramJunkDateGuard excludes zeroed, pre-epoch, and far-future datetimes
+// from the histogram. It is ANDed with the request's WHERE on both halves.
+const histogramJunkDateGuard = "datetime > '1970-01-01' AND datetime < '2100-01-01'"
+
+// GetTimelineHistogram returns evidence and examiner note counts bucketed by
+// time interval. The WHERE is the grid's: buildSimpleQuery in simple mode
+// (base, filter group, then keyword, bookmark-only, and the date range as
+// constraints), and the base-prefixed raw clause in advanced mode, as the
+// advanced export builds it. A simple-mode date range is passed as the
+// histogram window; otherwise the store takes it from the matching rows.
 func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
 
-	// Build WHERE clause from filters using dialect-aware placeholders and quoting.
-	// alwaysParts are ANDed unconditionally (junk date guard, tab base query).
-	// userParts are combined with the user's chosen logic (AND/OR).
-	d := a.queryDialect()
-	var alwaysParts []string
-	var userParts []string
+	var where string
 	var whereArgs []interface{}
-	paramIdx := 1
-
-	// Always exclude junk dates (zeroed, pre-epoch, far-future)
-	alwaysParts = append(alwaysParts, "datetime > '1970-01-01' AND datetime < '2100-01-01'")
-
-	// In advanced mode the clause is the whole user query, matching
-	// AdvancedSearch and advanced-mode export: filter panel filters (which
-	// carry the date range) and bookmark-only are not applied. The base query
-	// still applies through alwaysParts. An advanced request with no clause
-	// falls back to the simple path, as the grid does.
-	advanced := isAdvancedSearch(req)
-
-	if !advanced {
-		for _, f := range req.Filters {
-			if !isValidModelField(f.Field) {
-				continue
-			}
-			if f.Field == importIDField {
-				n, err := importIDValue(f.Operator, f.Value)
-				if err != nil {
-					return nil, err
-				}
-				userParts = append(userParts, fmt.Sprintf("%s = %s", d.QuoteColumn(importIDField), d.Placeholder(paramIdx)))
-				paramIdx++
-				whereArgs = append(whereArgs, n)
-				continue
-			}
-			switch f.Operator {
-			case "=", "!=", "LIKE", "NOT LIKE", ">=", "<=":
-				val := f.Value
-				if f.Field == "datetime" {
-					val = normalizeDate(val, f.Operator == "<=")
-				}
-				userParts = append(userParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(f.Field), f.Operator, d.Placeholder(paramIdx)))
-				paramIdx++
-				whereArgs = append(whereArgs, val)
-			}
+	var window *database.HistogramWindow
+	if isAdvancedSearch(req) {
+		// Filter panel filters, the date range, and bookmark-only are not
+		// applied in advanced mode, matching AdvancedSearch and the export.
+		if err := query.ValidateRawWhere(req.SearchText); err != nil {
+			return nil, err
+		}
+		clause, err := advancedClauseWithBase(req.SearchText, req.BaseField, req.BaseOp, req.BaseValue)
+		if err != nil {
+			return nil, fmt.Errorf("building advanced histogram clause: %w", err)
+		}
+		if a.driver == "postgres" {
+			clause = quotePostgresReservedWords(clause)
+		}
+		where = "(" + clause + ")"
+	} else {
+		q, err := buildSimpleQuery(req, a.queryDialect(), 0)
+		if err != nil {
+			return nil, err
+		}
+		where, whereArgs = q.BuildWhere()
+		// An explicit date range is the histogram window, normalized as the
+		// WHERE normalizes it, so notes anywhere in the range show.
+		if req.DateFrom != "" && req.DateTo != "" {
+			window = &database.HistogramWindow{From: normalizeDate(req.DateFrom, false), To: normalizeDate(req.DateTo, true)}
 		}
 	}
 
-	// Full-text or advanced search
-	if req.SearchText != "" {
-		if advanced {
-			// Advanced mode: SearchText is a raw SQL WHERE fragment. Inject it
-			// directly. Apply PostgreSQL reserved-word quoting when needed.
-			if err := query.ValidateRawWhere(req.SearchText); err != nil {
-				return nil, err
-			}
-			clause := req.SearchText
-			if a.driver == "postgres" {
-				clause = quotePostgresReservedWords(clause)
-			}
-			userParts = append(userParts, "("+clause+")")
-		} else {
-			// Simple mode: keyword LIKE search across key columns.
-			searchFields := []string{
-				"desc", "filename", "source", "sourcetype", "type",
-				"user", "host", "extra", "tag", "url", "source_name",
-				"computer_name", "format", "notes",
-			}
-			var orParts []string
-			for _, field := range searchFields {
-				orParts = append(orParts, fmt.Sprintf("%s LIKE %s", d.QuoteColumn(field), d.Placeholder(paramIdx)))
-				paramIdx++
-				whereArgs = append(whereArgs, "%"+req.SearchText+"%")
-			}
-			userParts = append(userParts, "("+strings.Join(orParts, " OR ")+")")
-		}
+	whereClause := "WHERE " + histogramJunkDateGuard
+	if where != "" {
+		whereClause += " AND " + where
 	}
 
-	// Bookmark filter (simple mode only; see advanced above)
-	if req.BookmarkOnly && !advanced {
-		userParts = append(userParts, "bookmark = 1")
-	}
-
-	// Tab base query: always ANDed regardless of the user's AND/OR logic setting
-	if req.BaseField != "" && isValidModelField(req.BaseField) {
-		baseOp := "="
-		if req.BaseOp == "LIKE" {
-			baseOp = "LIKE"
-		}
-		var baseArg interface{} = req.BaseValue
-		if req.BaseField == importIDField {
-			n, err := importIDValue(baseOperator(req.BaseOp), req.BaseValue)
-			if err != nil {
-				return nil, err
-			}
-			baseOp = "="
-			baseArg = n
-		}
-		alwaysParts = append(alwaysParts, fmt.Sprintf("%s %s %s", d.QuoteColumn(req.BaseField), baseOp, d.Placeholder(paramIdx)))
-		paramIdx++
-		whereArgs = append(whereArgs, baseArg)
-	}
-
-	logic := "AND"
-	if req.Logic == "OR" {
-		logic = "OR"
-	}
-
-	// Assemble: all alwaysParts ANDed, then user parts joined with logic
-	allParts := make([]string, len(alwaysParts))
-	copy(allParts, alwaysParts)
-	if len(userParts) > 0 {
-		allParts = append(allParts, "("+strings.Join(userParts, " "+logic+" ")+")")
-	}
-	whereClause := "WHERE " + strings.Join(allParts, " AND ")
-
-	// Delegate to store for all database operations (date range, bucketing, histogram query)
-	dbBuckets, err := a.store.GetTimelineHistogram(whereClause, whereArgs)
+	// The store runs the same WHERE over evidence and over the projected notes.
+	dbBuckets, err := a.store.GetTimelineHistogram(whereClause, whereArgs, window)
 	if err != nil {
 		return nil, err
 	}
@@ -1345,12 +1204,18 @@ func (a *App) ToggleBookmark(rowid int64) (int64, error) {
 	return a.store.ToggleBookmark(rowid)
 }
 
-// AddExaminerNote creates a new examiner note and returns the negated ID.
+// AddExaminerNote creates a new examiner note and returns the negated ID. The
+// datetime must parse under parseNoteDatetime and is stored in its canonical
+// form on both backends.
 func (a *App) AddExaminerNote(datetime, description string) (int64, error) {
 	if a.store == nil {
 		return 0, fmt.Errorf("no database open")
 	}
-	id, err := a.store.InsertExaminerNote(datetime, description, "", "")
+	canonical, err := parseNoteDatetime(datetime)
+	if err != nil {
+		return 0, err
+	}
+	id, err := a.store.InsertExaminerNote(canonical, description, "", "")
 	if err != nil {
 		return 0, err
 	}
@@ -1565,13 +1430,13 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 
 	sqlStr, args := buildPushReadQuery()
 
-	events, err := a.store.ExecuteQuery(sqlStr, args, nil)
+	events, err := a.store.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		return "", fmt.Errorf("reading events from SQLite: %w", err)
 	}
 
-	// Examiner notes must not reach log2timeline. The read above excludes them;
-	// this catches any that slip through, and the notes copy below handles them.
+	// Examiner notes must not reach log2timeline. The read above cannot return
+	// them; this guard catches any that would, and the notes copy below handles them.
 	events, droppedNotes := evidenceOnly(events)
 	if droppedNotes > 0 {
 		a.logError(fmt.Sprintf("Push: dropped %d examiner note rows from the evidence read; notes are copied to examiner_notes separately", droppedNotes))
@@ -1652,16 +1517,16 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 }
 
 // buildPushReadQuery builds the SQLite read that PushToPostgres copies into
-// PostgreSQL log2timeline. The /* no-notes */ marker keeps the examiner notes
-// UNION out of the read. Notes are copied to examiner_notes separately, and
-// copying them here would store each one as an editable evidence row.
+// PostgreSQL log2timeline. It uses Build, which reads log2timeline only, so it
+// is evidence-only by construction; it must never use BuildCombined. Notes are
+// copied to examiner_notes separately, and copying them here would store each
+// one as an editable evidence row.
 func buildPushReadQuery() (string, []interface{}) {
 	q := query.New(999999999) // effectively unlimited, matches ExportCSV pattern
 	q.SetDialect(query.DefaultDialect)
 	q.OrderBy("datetime")
 	q.SetPage(1)
-	sqlStr, args := q.Build()
-	return "/* no-notes */ " + sqlStr, args
+	return q.Build()
 }
 
 // evidenceOnly returns the events that are evidence rows (positive IDs) and

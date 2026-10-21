@@ -241,12 +241,16 @@ type Query struct {
 	predicates []*Predicate
 	// base is the tab base query. It is ANDed with the whole filter set, so it
 	// applies regardless of the filters' AND/OR logic.
-	base     *Predicate
-	logic    Logic
-	orderBy  string
-	pageSize int
-	page     int
-	dialect  QueryDialect
+	base *Predicate
+	// constraints are ANDed with the base and the filter group, outside the
+	// group's logic. Keyword search, bookmark-only, and the date range go here
+	// so an OR filter group can never widen them.
+	constraints []*Predicate
+	logic       Logic
+	orderBy     string
+	pageSize    int
+	page        int
+	dialect     QueryDialect
 }
 
 // New creates a new Query with the given page size.
@@ -276,18 +280,72 @@ func (q *Query) SetBase(p *Predicate) {
 	q.base = p
 }
 
-// wherePredicate returns the full WHERE predicate: the base ANDed with the
-// filters, which are combined with the query's logic. It returns nil when there
-// is neither a base nor a filter.
+// AddConstraint appends a predicate that is ANDed with the base and the whole
+// filter group, regardless of the group's logic. Nil predicates are ignored.
+func (q *Query) AddConstraint(p *Predicate) {
+	if p != nil {
+		q.constraints = append(q.constraints, p)
+	}
+}
+
+// wherePredicate returns the full WHERE predicate: the base, the filters
+// combined with the query's logic, and each constraint, all ANDed. It returns
+// nil when there is nothing to filter on.
 func (q *Query) wherePredicate() *Predicate {
-	user := Combine(q.predicates, q.logic)
-	if q.base == nil {
-		return user
+	parts := []*Predicate{q.base, Combine(q.predicates, q.logic)}
+	parts = append(parts, q.constraints...)
+	return Combine(parts, AND)
+}
+
+// BuildWhere returns the WHERE predicate (without the WHERE keyword) and its
+// arguments, numbered from 1: the base, the filter group, and the constraints,
+// exactly as Build, BuildCombined, and the counts apply them. It returns an
+// empty string when there is nothing to filter on.
+func (q *Query) BuildWhere() (string, []interface{}) {
+	where, args := q.whereSQL()
+	return strings.TrimPrefix(where, " WHERE "), args
+}
+
+// whereSQL renders " WHERE <predicate>" and its arguments.
+// It returns an empty string when there is nothing to filter on.
+func (q *Query) whereSQL() (string, []interface{}) {
+	combined := q.wherePredicate()
+	if combined == nil {
+		return "", nil
 	}
-	if user == nil {
-		return q.base
+	sql, args, _ := combined.whereClauseWithDialect(q.dialect, 1)
+	if sql == "" {
+		return "", nil
 	}
-	return Combine([]*Predicate{q.base, user}, AND)
+	return " WHERE " + sql, args
+}
+
+// tailSQL renders ORDER BY and LIMIT/OFFSET.
+func (q *Query) tailSQL() string {
+	var sql string
+	if q.orderBy != "" {
+		sql += " ORDER BY " + q.dialect.QuoteColumn(q.orderBy)
+	}
+	if q.pageSize > 0 {
+		offset := q.pageSize * (q.page - 1)
+		sql += fmt.Sprintf(" LIMIT %d OFFSET %d", q.pageSize, offset)
+	}
+	return sql
+}
+
+// BuildCombined generates the SELECT over evidence and projected examiner
+// notes (see CombinedSource), with the WHERE applied once, outside the UNION.
+func (q *Query) BuildCombined() (string, []interface{}) {
+	where, args := q.whereSQL()
+	return "SELECT " + selectList(q.dialect) + " FROM " + CombinedSource(q.dialect) + where + q.tailSQL(), args
+}
+
+// BuildNotesCount generates a COUNT over the projected examiner notes with the
+// same WHERE and arguments as BuildCount. The caller adds the two counts, so
+// the evidence count keeps any covering index a count over the UNION would lose.
+func (q *Query) BuildNotesCount() (string, []interface{}) {
+	where, args := q.whereSQL()
+	return "SELECT COUNT(*) FROM " + NotesSource(q.dialect) + where, args
 }
 
 func (q *Query) AddPredicate(p *Predicate) {
@@ -340,56 +398,93 @@ func (q *Query) PageNumber() int {
 
 // Build generates the full SQL SELECT statement and its parameter values.
 // Returns the SQL string and a slice of arguments for parameterized execution.
+// It reads log2timeline only, so it never returns examiner notes.
 func (q *Query) Build() (string, []interface{}) {
-	idCol := q.dialect.IDColumn()
-	quotedFields := make([]string, len(model.Fields))
-	for i, f := range model.Fields {
-		quotedFields[i] = q.dialect.QuoteColumn(f)
-	}
-	selectFields := idCol + ", " + strings.Join(quotedFields, ", ")
-	sql := "SELECT " + selectFields + " FROM log2timeline"
-
-	var allArgs []interface{}
-
-	// Build WHERE clause from predicates
-	if combined := q.wherePredicate(); combined != nil {
-		whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
-		if whereSQL != "" {
-			sql += " WHERE " + whereSQL
-			allArgs = append(allArgs, whereArgs...)
-		}
-	}
-
-	// ORDER BY
-	if q.orderBy != "" {
-		sql += " ORDER BY " + q.dialect.QuoteColumn(q.orderBy)
-	}
-
-	// LIMIT / OFFSET for pagination
-	if q.pageSize > 0 {
-		offset := q.pageSize * (q.page - 1)
-		sql += fmt.Sprintf(" LIMIT %d OFFSET %d", q.pageSize, offset)
-	}
-
-	return sql, allArgs
+	where, args := q.whereSQL()
+	return "SELECT " + selectList(q.dialect) + " FROM log2timeline" + where + q.tailSQL(), args
 }
 
-// BuildCount generates a COUNT query using the same predicates.
+// BuildCount generates a COUNT over log2timeline (evidence only) using the
+// same predicates.
 func (q *Query) BuildCount() (string, []interface{}) {
-	idCol := q.dialect.IDColumn()
-	sql := "SELECT COUNT(" + idCol + ") FROM log2timeline"
+	where, args := q.whereSQL()
+	return "SELECT COUNT(" + q.dialect.IDColumn() + ") FROM log2timeline" + where, args
+}
 
-	var allArgs []interface{}
+// ExaminerNoteSource and ExaminerNoteSourceType are the source and sourcetype
+// every projected examiner note carries.
+const (
+	ExaminerNoteSource     = "EXAMINER"
+	ExaminerNoteSourceType = "Examiner Note"
+)
 
-	if combined := q.wherePredicate(); combined != nil {
-		whereSQL, whereArgs, _ := combined.whereClauseWithDialect(q.dialect, 1)
-		if whereSQL != "" {
-			sql += " WHERE " + whereSQL
-			allArgs = append(allArgs, whereArgs...)
-		}
+// integerFields are the log2timeline columns declared INT. Their NULLs are cast
+// to INTEGER in the notes projection so PostgreSQL types them as the evidence
+// side does; an untyped NULL in a standalone subquery would become text.
+var integerFields = map[string]bool{
+	"offset": true, "store_number": true, "store_index": true,
+	"vss_store_number": true, "bookmark": true, "import_id": true,
+}
+
+// selectList returns the ID column followed by model.Fields, quoted for d.
+// This is the Pattern B order the Pattern B scan expects.
+func selectList(d QueryDialect) string {
+	quoted := make([]string, len(model.Fields))
+	for i, f := range model.Fields {
+		quoted[i] = d.QuoteColumn(f)
 	}
+	return d.IDColumn() + ", " + strings.Join(quoted, ", ")
+}
 
-	return sql, allArgs
+// NotesProjection returns a SELECT that projects examiner_notes as
+// log2timeline rows in Pattern B order: the ID negated, source EXAMINER,
+// sourcetype Examiner Note, desc from description, datetime (normalized by
+// NoteDatetimeSQL), tag, color, and bookmark from the note, and every other
+// column NULL, including import_id.
+func NotesProjection(d QueryDialect) string {
+	cols := make([]string, 0, len(model.Fields)+1)
+	cols = append(cols, "-id AS "+d.IDColumn())
+	for _, f := range model.Fields {
+		var expr string
+		switch f {
+		case "datetime":
+			expr = d.NoteDatetimeSQL(f)
+		case "tag", "color", "bookmark":
+			expr = f
+		case "desc":
+			expr = "description"
+		case "source":
+			expr = "'" + ExaminerNoteSource + "'"
+		case "sourcetype":
+			expr = "'" + ExaminerNoteSourceType + "'"
+		default:
+			if integerFields[f] {
+				expr = "CAST(NULL AS INTEGER)"
+			} else {
+				expr = "CAST(NULL AS TEXT)"
+			}
+		}
+		cols = append(cols, expr+" AS "+d.QuoteColumn(f))
+	}
+	return "SELECT " + strings.Join(cols, ", ") + " FROM examiner_notes"
+}
+
+// CombinedSource returns the derived table every notes-inclusive query reads:
+// evidence UNION ALL projected notes. A WHERE on it applies to both sides with
+// the same semantics, so no rule decides separately whether notes appear.
+//
+// It is aliased log2timeline so an advanced clause that qualifies a column,
+// such as log2timeline.host, still resolves. The FROM log2timeline inside the
+// subquery is resolved in the subquery's own scope, so it names the real table.
+func CombinedSource(d QueryDialect) string {
+	return "(SELECT " + selectList(d) + " FROM log2timeline UNION ALL " + NotesProjection(d) + ") AS log2timeline"
+}
+
+// NotesSource returns the projected notes as a derived table aliased
+// log2timeline, for queries over the notes half alone (the notes count and the
+// notes histogram). The alias matches CombinedSource for the same reason.
+func NotesSource(d QueryDialect) string {
+	return "(" + NotesProjection(d) + ") AS log2timeline"
 }
 
 // PredicateFields returns all field names referenced across all predicates.
@@ -480,40 +575,33 @@ func ValidateRawWhere(where string) error {
 }
 
 // Build generates the SQL using the raw WHERE clause plus ordering and pagination.
+// It reads log2timeline only. Raw queries take no parameterized arguments.
 func (rq *RawQuery) Build() (string, []interface{}) {
-	idCol := rq.dialect.IDColumn()
-	quotedFields := make([]string, len(model.Fields))
-	for i, f := range model.Fields {
-		quotedFields[i] = rq.dialect.QuoteColumn(f)
-	}
-	selectFields := idCol + ", " + strings.Join(quotedFields, ", ")
-	sql := "SELECT " + selectFields + " FROM log2timeline"
-
-	if rq.rawWhere != "" {
-		sql += " WHERE " + rq.rawWhere
-	}
-
-	if rq.orderBy != "" {
-		sql += " ORDER BY " + rq.dialect.QuoteColumn(rq.orderBy)
-	}
-
-	if rq.pageSize > 0 {
-		offset := rq.pageSize * (rq.page - 1)
-		sql += fmt.Sprintf(" LIMIT %d OFFSET %d", rq.pageSize, offset)
-	}
-
-	// Raw queries don't use parameterized args for the WHERE clause
-	return sql, nil
+	return "SELECT " + selectList(rq.dialect) + " FROM log2timeline" + rq.rawWhereSQL() + rq.tailSQL(), nil
 }
 
-// BuildCount generates a COUNT query using the raw WHERE clause.
+// BuildCount generates a COUNT over log2timeline using the raw WHERE clause.
 func (rq *RawQuery) BuildCount() (string, []interface{}) {
-	idCol := rq.dialect.IDColumn()
-	sql := "SELECT COUNT(" + idCol + ") FROM log2timeline"
-	if rq.rawWhere != "" {
-		sql += " WHERE " + rq.rawWhere
+	return "SELECT COUNT(" + rq.dialect.IDColumn() + ") FROM log2timeline" + rq.rawWhereSQL(), nil
+}
+
+// BuildCombined generates the SELECT over evidence and projected examiner
+// notes with the raw WHERE applied once, outside the UNION.
+func (rq *RawQuery) BuildCombined() (string, []interface{}) {
+	return "SELECT " + selectList(rq.dialect) + " FROM " + CombinedSource(rq.dialect) + rq.rawWhereSQL() + rq.tailSQL(), nil
+}
+
+// BuildNotesCount generates a COUNT over the projected examiner notes using
+// the raw WHERE clause. Add it to BuildCount for the combined total.
+func (rq *RawQuery) BuildNotesCount() (string, []interface{}) {
+	return "SELECT COUNT(*) FROM " + NotesSource(rq.dialect) + rq.rawWhereSQL(), nil
+}
+
+func (rq *RawQuery) rawWhereSQL() string {
+	if rq.rawWhere == "" {
+		return ""
 	}
-	return sql, nil
+	return " WHERE " + rq.rawWhere
 }
 
 // isValidField checks a field name against the known columns.

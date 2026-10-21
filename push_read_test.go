@@ -6,6 +6,7 @@ import (
 
 	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/cdtdelta/4n6time/internal/model"
+	"github.com/cdtdelta/4n6time/internal/query"
 )
 
 // newPushReadApp seeds six evidence rows and three examiner notes, so the push
@@ -42,33 +43,50 @@ func newPushReadApp(t *testing.T) *App {
 	return &App{store: store, driver: "sqlite"}
 }
 
-// The unmarked query is the pre-fix read. The test asserts it does return notes,
-// so the fixture is shown to reproduce the bug.
-func TestPushReadUnmarkedQueryReturnsNotes(t *testing.T) {
+// The notes-inclusive builder, given the push read's settings, returns the
+// notes. This shows the fixture has notes to leak, so the next test's
+// evidence-only result comes from the push read itself.
+func TestNotesInclusiveBuilderReturnsNotesPushReadDoesNot(t *testing.T) {
 	app := newPushReadApp(t)
-	sqlStr, args := buildPushReadQuery()
-	unmarked := sqlStr[len("/* no-notes */ "):]
+	q := query.New(999999999)
+	q.SetDialect(query.DefaultDialect)
+	q.OrderBy("datetime")
+	q.SetPage(1)
+	combinedSQL, combinedArgs := q.BuildCombined()
 
-	events, err := app.store.ExecuteQuery(unmarked, args, nil)
+	combined, err := app.store.ExecuteQuery(combinedSQL, combinedArgs)
 	if err != nil {
-		t.Fatalf("ExecuteQuery: %v", err)
+		t.Fatalf("ExecuteQuery (combined): %v", err)
 	}
-	var notes int
+	if got := countNoteRows(combined); got != 3 {
+		t.Fatalf("notes-inclusive builder: got %d note rows, want 3 (fixture has no notes to leak)", got)
+	}
+
+	pushSQL, pushArgs := buildPushReadQuery()
+	pushed, err := app.store.ExecuteQuery(pushSQL, pushArgs)
+	if err != nil {
+		t.Fatalf("ExecuteQuery (push read): %v", err)
+	}
+	if got := countNoteRows(pushed); got != 0 {
+		t.Errorf("push read: got %d note rows, want 0", got)
+	}
+}
+
+func countNoteRows(events []*model.Event) int {
+	n := 0
 	for _, e := range events {
 		if e.ID < 0 {
-			notes++
+			n++
 		}
 	}
-	if notes != 3 {
-		t.Fatalf("unmarked query: got %d note rows, want 3 (fixture does not reproduce the bug)", notes)
-	}
+	return n
 }
 
 func TestPushReadQueryExcludesExaminerNotes(t *testing.T) {
 	app := newPushReadApp(t)
 	sqlStr, args := buildPushReadQuery()
 
-	events, err := app.store.ExecuteQuery(sqlStr, args, nil)
+	events, err := app.store.ExecuteQuery(sqlStr, args)
 	if err != nil {
 		t.Fatalf("ExecuteQuery: %v", err)
 	}

@@ -184,6 +184,8 @@ export namespace main {
 	    baseField: string;
 	    baseOp: string;
 	    baseValue: string;
+	    dateFrom: string;
+	    dateTo: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new QueryRequest(source);
@@ -202,6 +204,8 @@ export namespace main {
 	        this.baseField = source["baseField"];
 	        this.baseOp = source["baseOp"];
 	        this.baseValue = source["baseValue"];
+	        this.dateFrom = source["dateFrom"];
+	        this.dateTo = source["dateTo"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -261,6 +265,7 @@ export namespace main {
 	export class TimelineBucket {
 	    timestamp: string;
 	    count: number;
+	    notesCount: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new TimelineBucket(source);
@@ -270,6 +275,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.timestamp = source["timestamp"];
 	        this.count = source["count"];
+	        this.notesCount = source["notesCount"];
 	    }
 	}
 

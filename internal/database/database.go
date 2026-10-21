@@ -3,7 +3,6 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/cdtdelta/4n6time/internal/model"
@@ -742,7 +741,7 @@ func (db *SQLiteStore) GetExaminerNotes() ([]*model.Event, error) {
 		}
 		notes = append(notes, &model.Event{
 			ID:         -id,
-			Datetime:   datetime,
+			Datetime:   displayDatetime(datetime),
 			Desc:       description,
 			Source:     "EXAMINER",
 			SourceType: "Examiner Note",
@@ -866,43 +865,12 @@ func appendTagDedup(existing, newTag string) string {
 	return existing + "," + newTag
 }
 
-// examinerNotesUnionPatternB returns a UNION ALL SELECT for examiner notes
-// that produces the same columns in Pattern B order (model.Fields).
-// The ID is negated so the frontend can distinguish notes from evidence events.
-func examinerNotesUnionPatternB(dialect Dialect) string {
-	// Pattern B: id, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
-	//            filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
-	//            offset, store_number, store_index, vss_store_number, URL, record_number,
-	//            event_identifier, event_type, source_name, user_sid, computer_name, bookmark,
-	//            import_id
-	return " UNION ALL SELECT " +
-		"-id, datetime, '' AS timezone, '' AS " + dialect.QuoteColumn("MACB") + ", " +
-		"'EXAMINER' AS source, 'Examiner Note' AS sourcetype, '' AS type, '' AS " + dialect.QuoteColumn("user") + ", " +
-		"'' AS host, description AS " + dialect.QuoteColumn("desc") + ", " +
-		"'' AS filename, '' AS inode, '' AS notes, '' AS format, '' AS extra, " +
-		"'' AS reportnotes, '' AS inreport, tag, color, " +
-		"0 AS " + dialect.QuoteColumn("offset") + ", 0 AS store_number, 0 AS store_index, " +
-		"0 AS vss_store_number, '' AS URL, '' AS record_number, " +
-		"'' AS event_identifier, '' AS event_type, '' AS source_name, " +
-		"'' AS user_sid, '' AS computer_name, bookmark, NULL AS import_id " +
-		"FROM examiner_notes"
-}
-
-// ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
-// column order. This is used for queries built by query.go's Build() method,
-// where the SELECT list is: rowid, datetime, timezone, MACB, source, ...
-// (Pattern B scan order, distinct from QueryEvents' Pattern A order.)
-//
-// Examiner notes are merged via UNION ALL with negated IDs. The union is
-// wrapped in a subquery so the outer ORDER BY and LIMIT/OFFSET apply to both
-// evidence events and examiner notes together. notesFilter, when non-nil,
-// adds a WHERE clause to the examiner_notes SELECT to keep the two sides
-// of the UNION consistent with the main filter.
-func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error) {
-	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect, notesFilter)
-	allArgs := combineArgs(args, notesFilter)
-
-	rows, err := db.conn.Query(sqlStr, allArgs...)
+// ExecuteQuery runs a pre-built SQL SELECT from the query package and scans
+// the results in model.Fields order (Pattern B: rowid, datetime, timezone,
+// MACB, ...), distinct from QueryEvents' Pattern A order. The SQL runs as
+// given: examiner notes appear only when it reads query.CombinedSource.
+func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
+	rows, err := db.conn.Query(sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -911,238 +879,24 @@ func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}, notesFilt
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
-// Examiner notes are included in the count via UNION ALL, filtered by notesFilter
-// when non-nil so the count matches the ExecuteQuery result set.
-func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) (int64, error) {
-	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect, notesFilter)
-	allArgs := combineArgs(args, notesFilter)
-
+func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
 	var count int64
-	err := db.conn.QueryRow(sqlStr, allArgs...).Scan(&count)
-	if err != nil {
+	if err := db.conn.QueryRow(sqlStr, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}
 	return count, nil
 }
 
-// GetTimelineHistogram returns event counts bucketed by time interval.
-// whereClause should include the "WHERE" keyword if non-empty (e.g. "WHERE datetime > '1970-01-01'").
-// whereArgs are the parameter values for any placeholders in the clause.
-// The bucket size is automatically chosen based on the filtered date range.
-func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}) ([]TimelineBucket, error) {
-	// Get date range to determine bucket size
-	rangeSQL := "SELECT MIN(datetime), MAX(datetime) FROM log2timeline"
-	if whereClause != "" {
-		rangeSQL += " " + whereClause
-	}
-
-	var minDate, maxDate string
-	if err := db.conn.QueryRow(rangeSQL, whereArgs...).Scan(&minDate, &maxDate); err != nil {
-		return nil, fmt.Errorf("getting date range: %w", err)
-	}
-
-	if minDate == "" || maxDate == "" {
-		return []TimelineBucket{}, nil
-	}
-
-	// Choose bucket format based on date range span
-	bucketFormat := "%Y-%m-%d %H:00:00" // default: hourly
-
-	if len(minDate) >= 10 && len(maxDate) >= 10 {
-		minDay := minDate[:10]
-		maxDay := maxDate[:10]
-
-		if minDay == maxDay {
-			bucketFormat = "%Y-%m-%d %H:00:00"
-		} else {
-			minYM := minDate[:7]
-			maxYM := maxDate[:7]
-			if minYM == maxYM {
-				bucketFormat = "%Y-%m-%d"
-			} else {
-				minYear := minDate[:4]
-				maxYear := maxDate[:4]
-				if minYear != maxYear {
-					bucketFormat = "%Y-%m"
-				} else {
-					bucketFormat = "%Y-%m-%d"
-				}
-			}
-		}
-	}
-
-	// Build and run histogram query using dialect-specific date formatting
-	bucketExpr := db.dialect.DateFormatSQL("datetime", bucketFormat)
-	histSQL := "SELECT " + bucketExpr + " as bucket, COUNT(*) as cnt FROM log2timeline"
-	if whereClause != "" {
-		histSQL += " " + whereClause
-	}
-	histSQL += " GROUP BY bucket ORDER BY bucket"
-
-	rows, err := db.conn.Query(histSQL, whereArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("histogram query: %w", err)
-	}
-	defer rows.Close()
-
-	var buckets []TimelineBucket
-	for rows.Next() {
-		var b TimelineBucket
-		if err := rows.Scan(&b.Timestamp, &b.Count); err != nil {
-			return nil, fmt.Errorf("scanning bucket: %w", err)
-		}
-		buckets = append(buckets, b)
-	}
-
-	return buckets, rows.Err()
+// GetTimelineHistogram returns evidence and examiner note counts bucketed by
+// time interval (see runHistogram). whereClause includes the WHERE keyword if
+// non-empty and applies to both halves; whereArgs are its parameter values.
+// window, when set, is an explicit range (see runHistogram).
+func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
+	return runHistogram(db.conn, db.dialect, "MIN(datetime), MAX(datetime)", whereClause, whereArgs, window)
 }
 
-// shouldIncludeExaminerNotes inspects a SQL statement for a source filter.
-// If the WHERE clause filters on a specific source value that excludes
-// 'EXAMINER', examiner notes should be excluded from the UNION.
-//
-// This is a regex heuristic over the query text, not a real SQL parser. The
-// WHERE clause may originate from the advanced search feature's raw,
-// user-supplied clause (a documented exception to parameterized queries), so
-// it must not assume well-formed, simple input. Parameterized queries built
-// by the query package never produce a literal here (they always bind through
-// a placeholder), so the literal-matching regexes below only ever engage on
-// advanced search's raw SQL.
-//
-// Matched literal conditions are resolved in this priority order, and the
-// first rule that applies decides:
-//  1. any source = 'EXAMINER' includes notes
-//  2. else any source = '<other>' excludes notes
-//  3. else any source != / <> 'EXAMINER' excludes notes
-//  4. else any source != / <> '<other>' includes notes
-//  5. else any IN-list or LIKE comparison on source excludes notes
-//  6. else (no literal source filter) notes are included
-//
-// The order matters for clauses that combine conditions with AND: in
-// "source = 'FILE' AND source != 'REGISTRY'" the equality pins the result to
-// FILE, so notes must be excluded even though the != alone would admit them.
-// IN-lists and LIKE are ambiguous to this heuristic, so it fails closed: a
-// wrong exclusion just omits notes from one result set, while a wrong
-// inclusion could mix notes into an otherwise source-scoped result, which is
-// the worse outcome for an examiner relying on the filter.
-func shouldIncludeExaminerNotes(sqlStr string) bool {
-	// Parameterized queries signal note exclusion via a comment marker injected
-	// by app.go when the base query field is not one that examiner notes have.
-	if strings.Contains(sqlStr, "/* no-notes */") {
-		return false
-	}
-
-	// source = 'VALUE' / source != 'VALUE' / source <> 'VALUE'
-	re := regexp.MustCompile(`(?i)\bsource\s*(=|!=|<>)\s*'([^']*)'`)
-	var eqExaminer, eqOther, neExaminer, neOther bool
-	for _, m := range re.FindAllStringSubmatch(sqlStr, -1) {
-		isExaminer := strings.EqualFold(m[2], "EXAMINER")
-		switch {
-		case m[1] == "=" && isExaminer:
-			eqExaminer = true
-		case m[1] == "=":
-			eqOther = true
-		case isExaminer:
-			neExaminer = true
-		default:
-			neOther = true
-		}
-	}
-
-	switch {
-	case eqExaminer:
-		return true
-	case eqOther:
-		return false
-	case neExaminer:
-		return false
-	case neOther:
-		return true
-	}
-
-	// Other literal source comparisons (IN-lists, LIKE) can't be resolved by
-	// this heuristic; fail closed rather than guess.
-	reAmbiguous := regexp.MustCompile(`(?i)\bsource\s*(?:\bin\b|\bnot\s+in\b|\blike\b|\bnot\s+like\b)\s*[('"]`)
-	if reAmbiguous.MatchString(sqlStr) {
-		return false
-	}
-
-	// No resolvable or ambiguous literal source filter found; include examiner notes.
-	return true
-}
-
-// wrapWithExaminerNotesUnion takes a query.Build() output and injects a UNION ALL
-// for examiner notes. The original query is expected to have the form:
-//
-//	SELECT ... FROM log2timeline [WHERE ...] [ORDER BY ...] [LIMIT ... OFFSET ...]
-//
-// This function extracts the ORDER BY and LIMIT/OFFSET clauses, wraps the base
-// SELECT and the examiner notes UNION ALL in a subquery, and re-applies the
-// ORDER BY and pagination on the outer query.
-//
-// notesFilter, when non-nil, appends a WHERE clause to the examiner_notes SELECT
-// so that bookmark, datetime, and other compatible filters apply to notes as well.
-//
-// If the query filters on a specific source that is not 'EXAMINER', the UNION
-// is skipped entirely and the original query is returned unchanged.
-func wrapWithExaminerNotesUnion(sqlStr string, dialect Dialect, notesFilter *NotesFilter) string {
-	if !shouldIncludeExaminerNotes(sqlStr) {
-		return sqlStr
-	}
-
-	notesUnion := examinerNotesUnionPatternB(dialect)
-	if notesFilter != nil && notesFilter.SQL != "" {
-		notesUnion += " WHERE " + notesFilter.SQL
-	}
-
-	// Find ORDER BY clause position (case-insensitive search for " ORDER BY ")
-	upper := strings.ToUpper(sqlStr)
-	orderIdx := strings.Index(upper, " ORDER BY ")
-	if orderIdx < 0 {
-		// No ORDER BY: just append the union
-		return "SELECT * FROM (" + sqlStr + notesUnion + ") AS combined"
-	}
-
-	basePart := sqlStr[:orderIdx]
-	tailPart := sqlStr[orderIdx:]
-
-	return "SELECT * FROM (" + basePart + notesUnion + ") AS combined" + tailPart
-}
-
-// wrapCountWithExaminerNotes takes a query.BuildCount() output and adds the
-// examiner notes count. The original query has the form:
-//
-//	SELECT COUNT(rowid) FROM log2timeline [WHERE ...]
-//
-// notesFilter, when non-nil, restricts the examiner_notes count to only rows
-// that satisfy the compatible filter conditions.
-//
-// If the query filters on a specific source that is not 'EXAMINER', the
-// examiner notes count is not added.
-func wrapCountWithExaminerNotes(sqlStr string, dialect Dialect, notesFilter *NotesFilter) string {
-	if !shouldIncludeExaminerNotes(sqlStr) {
-		return sqlStr
-	}
-	notesCountSQL := "SELECT COUNT(*) FROM examiner_notes"
-	if notesFilter != nil && notesFilter.SQL != "" {
-		notesCountSQL += " WHERE " + notesFilter.SQL
-	}
-	return "SELECT (" + sqlStr + ") + (" + notesCountSQL + ")"
-}
-
-// combineArgs appends notesFilter.Args to args when a notes filter is present.
-func combineArgs(args []interface{}, notesFilter *NotesFilter) []interface{} {
-	if notesFilter == nil || len(notesFilter.Args) == 0 {
-		return args
-	}
-	combined := make([]interface{}, len(args)+len(notesFilter.Args))
-	copy(combined, args)
-	copy(combined[len(args):], notesFilter.Args)
-	return combined
-}
-
-// scanFieldsOrderEvents scans rows using model.Fields column order.
-// This matches the SELECT generated by query.go's Build() method:
+// scanFieldsOrderEvents scans rows in model.Fields column order (Pattern B),
+// the SELECT the query package builds:
 //
 //	rowid, datetime, timezone, MACB, source, sourcetype, type, user, host, desc,
 //	filename, inode, notes, format, extra, reportnotes, inreport, tag, color,
@@ -1150,29 +904,10 @@ func combineArgs(args []interface{}, notesFilter *NotesFilter) []interface{} {
 //	event_identifier, event_type, source_name, user_sid, computer_name, bookmark,
 //	import_id
 //
-// Note: datetime is at position 2 (right after rowid), NOT at position 15.
-// This is Pattern B, distinct from scanEvents which uses Pattern A.
+// Projected examiner notes carry real NULLs in every unmapped column, so the
+// scan must be NULL-safe; it shares the PostgreSQL implementation.
 func scanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
-	var events []*model.Event
-	for rows.Next() {
-		e := &model.Event{}
-		var importID sql.NullInt64
-		err := rows.Scan(
-			&e.ID, &e.Datetime, &e.Timezone, &e.MACB, &e.Source, &e.SourceType,
-			&e.Type, &e.User, &e.Host, &e.Desc, &e.Filename,
-			&e.Inode, &e.Notes, &e.Format, &e.Extra, &e.ReportNotes,
-			&e.InReport, &e.Tag, &e.Color, &e.Offset, &e.StoreNumber,
-			&e.StoreIndex, &e.VSSStoreNumber, &e.URL, &e.RecordNumber,
-			&e.EventID, &e.EventType, &e.SourceName, &e.UserSID, &e.ComputerName,
-			&e.Bookmark, &importID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("scanning event row: %w", err)
-		}
-		e.ImportID = importID.Int64
-		events = append(events, e)
-	}
-	return events, rows.Err()
+	return pgScanFieldsOrderEvents(rows)
 }
 
 // scanEvents converts sql.Rows into a slice of Event pointers.
@@ -1194,6 +929,7 @@ func scanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			return nil, fmt.Errorf("scanning event row: %w", err)
 		}
 		e.ImportID = importID.Int64
+		e.Datetime = displayDatetime(e.Datetime)
 		events = append(events, e)
 	}
 	return events, rows.Err()

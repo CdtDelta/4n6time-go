@@ -167,12 +167,13 @@ func TestExportCSVAdvancedMatchesGrid(t *testing.T) {
 			wantExaminer: true,
 		},
 		{
-			name:         "base query, notes included",
+			// The note's host is NULL, so the base excludes it.
+			name:         "host base query, notes excluded",
 			clause:       "desc LIKE '%evil%'",
 			baseField:    "host",
 			baseOp:       "=",
 			baseValue:    "WS1",
-			wantExaminer: true,
+			wantExaminer: false,
 		},
 		{
 			name:         "source filter, notes excluded",
@@ -287,14 +288,13 @@ func TestExportCSVSimpleUnchanged(t *testing.T) {
 		searchMode string
 		wantRows   int
 	}{
-		// Keyword search does not filter examiner notes (buildNotesFilter
-		// ignores SearchText), so the one note appears in every result below.
-		// 4 events match "evil", plus the note.
+		// Keyword search applies to the note like any row: its desc
+		// "analyst note on evil" matches "evil", so 4 events plus the note.
 		{"keyword, simple mode", "evil", "simple", 5},
 		// Requests from before the frontend sent searchMode.
 		{"keyword, mode unset", "evil", "", 5},
-		// 1 event matches, plus the note.
-		{"keyword containing semicolon", "logon; type", "simple", 2},
+		// 1 event matches; the note does not.
+		{"keyword containing semicolon", "logon; type", "simple", 1},
 		// Advanced mode with no clause falls back to the simple path, like
 		// the grid: all 6 events plus the note.
 		{"advanced mode, empty clause", "", "advanced", 7},

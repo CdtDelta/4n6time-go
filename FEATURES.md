@@ -51,3 +51,5 @@ Last updated: 2026-02-16
 | v0.9.0 | Export CSV respects bookmark-only and search text filters |
 | v0.17.0 | mac_apt CSV and JSONL import (21 timeline sources, Spotlight stores, recursive import with CSV/JSONL dedupe, untimed outputs skipped) |
 | v0.17.0 | Unparseable timestamp reporting (recursive summary counts, single-file notice, logged examples) |
+| v0.18.0 | Examiner notes lane in the timeline histogram (marker per time slot with notes, notes never add to bar heights, tooltip shows both counts, marker click sets the date range) |
+| v0.18.0 | Add Note dialog UTC validation (accepts YYYY-MM-DD HH:MM:SS or a pasted grid timestamp; rejects offsets, fractional seconds, date-only input, and invalid dates) |

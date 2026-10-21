@@ -268,7 +268,7 @@ func (db *PostgresStore) GetExaminerNotes() ([]*model.Event, error) {
 		}
 		notes = append(notes, &model.Event{
 			ID:         -id,
-			Datetime:   datetime.String,
+			Datetime:   displayDatetime(datetime.String),
 			Desc:       description.String,
 			Source:     "EXAMINER",
 			SourceType: "Examiner Note",
@@ -917,15 +917,12 @@ func (db *PostgresStore) DeleteQuery(name string) error {
 	return err
 }
 
-// ExecuteQuery runs a pre-built SQL SELECT and scans results using model.Fields
-// column order (Pattern B: id, datetime, timezone, MACB, ...).
-// Examiner notes are merged via UNION ALL with negated IDs. notesFilter, when
-// non-nil, applies a WHERE clause to the examiner_notes SELECT.
-func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error) {
-	sqlStr = wrapWithExaminerNotesUnion(sqlStr, db.dialect, notesFilter)
-	allArgs := combineArgs(args, notesFilter)
-
-	rows, err := db.conn.Query(sqlStr, allArgs...)
+// ExecuteQuery runs a pre-built SQL SELECT from the query package and scans
+// the results in model.Fields order (Pattern B: id, datetime, timezone, MACB,
+// ...). The SQL runs as given: examiner notes appear only when it reads
+// query.CombinedSource.
+func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
+	rows, err := db.conn.Query(sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -934,92 +931,25 @@ func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}, notesFi
 }
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
-// Examiner notes are included in the count via UNION ALL, filtered by notesFilter
-// when non-nil.
-func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}, notesFilter *NotesFilter) (int64, error) {
-	sqlStr = wrapCountWithExaminerNotes(sqlStr, db.dialect, notesFilter)
-	allArgs := combineArgs(args, notesFilter)
-
+func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
 	var count int64
-	err := db.conn.QueryRow(sqlStr, allArgs...).Scan(&count)
-	if err != nil {
+	if err := db.conn.QueryRow(sqlStr, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}
 	return count, nil
 }
 
-// GetTimelineHistogram returns event counts bucketed by time interval.
-// Uses to_char for PostgreSQL TIMESTAMP formatting and date range detection.
-func (db *PostgresStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}) ([]TimelineBucket, error) {
-	// Get date range to determine bucket size.
-	// Use to_char to produce consistent text output from TIMESTAMP columns.
-	rangeSQL := `SELECT COALESCE(to_char(MIN(datetime), 'YYYY-MM-DD HH24:MI:SS'), ''),
-	                    COALESCE(to_char(MAX(datetime), 'YYYY-MM-DD HH24:MI:SS'), '')
-	             FROM log2timeline`
-	if whereClause != "" {
-		rangeSQL += " " + whereClause
-	}
+// pgHistogramRange formats the TIMESTAMP range as text so the bucket format
+// can be chosen the same way on both backends.
+const pgHistogramRange = "COALESCE(to_char(MIN(datetime), 'YYYY-MM-DD HH24:MI:SS'), ''), " +
+	"COALESCE(to_char(MAX(datetime), 'YYYY-MM-DD HH24:MI:SS'), '')"
 
-	var minDate, maxDate string
-	if err := db.conn.QueryRow(rangeSQL, whereArgs...).Scan(&minDate, &maxDate); err != nil {
-		return nil, fmt.Errorf("getting date range: %w", err)
-	}
-
-	if minDate == "" || maxDate == "" {
-		return []TimelineBucket{}, nil
-	}
-
-	// Choose bucket format based on date range span.
-	// These are strftime-style strings; DateFormatSQL maps them to to_char equivalents.
-	bucketFormat := "%Y-%m-%d %H:00:00" // default: hourly
-
-	if len(minDate) >= 10 && len(maxDate) >= 10 {
-		minDay := minDate[:10]
-		maxDay := maxDate[:10]
-
-		if minDay == maxDay {
-			bucketFormat = "%Y-%m-%d %H:00:00"
-		} else {
-			minYM := minDate[:7]
-			maxYM := maxDate[:7]
-			if minYM == maxYM {
-				bucketFormat = "%Y-%m-%d"
-			} else {
-				minYear := minDate[:4]
-				maxYear := maxDate[:4]
-				if minYear != maxYear {
-					bucketFormat = "%Y-%m"
-				} else {
-					bucketFormat = "%Y-%m-%d"
-				}
-			}
-		}
-	}
-
-	// Build and run histogram query using dialect-specific date formatting
-	bucketExpr := db.dialect.DateFormatSQL("datetime", bucketFormat)
-	histSQL := "SELECT " + bucketExpr + " as bucket, COUNT(*) as cnt FROM log2timeline"
-	if whereClause != "" {
-		histSQL += " " + whereClause
-	}
-	histSQL += " GROUP BY bucket ORDER BY bucket"
-
-	rows, err := db.conn.Query(histSQL, whereArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("histogram query: %w", err)
-	}
-	defer rows.Close()
-
-	var buckets []TimelineBucket
-	for rows.Next() {
-		var b TimelineBucket
-		if err := rows.Scan(&b.Timestamp, &b.Count); err != nil {
-			return nil, fmt.Errorf("scanning bucket: %w", err)
-		}
-		buckets = append(buckets, b)
-	}
-
-	return buckets, rows.Err()
+// GetTimelineHistogram returns evidence and examiner note counts bucketed by
+// time interval (see runHistogram). whereClause includes the WHERE keyword if
+// non-empty and applies to both halves; whereArgs are its parameter values.
+// window, when set, is an explicit range (see runHistogram).
+func (db *PostgresStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
+	return runHistogram(db.conn, db.dialect, pgHistogramRange, whereClause, whereArgs, window)
 }
 
 // pgScanEvents converts sql.Rows into a slice of Event pointers using
@@ -1078,7 +1008,7 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 			Notes:          notes.String,
 			Format:         format.String,
 			Extra:          extra.String,
-			Datetime:       datetime.String,
+			Datetime:       displayDatetime(datetime.String),
 			ReportNotes:    reportnotes.String,
 			InReport:       inreport.String,
 			Tag:            tag.String,
@@ -1143,7 +1073,7 @@ func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 
 		e := &model.Event{
 			ID:             id,
-			Datetime:       datetime.String,
+			Datetime:       displayDatetime(datetime.String),
 			Timezone:       timezone.String,
 			MACB:           macb.String,
 			Source:         source.String,

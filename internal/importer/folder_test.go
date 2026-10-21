@@ -38,10 +38,10 @@ func (m *mockStore) QueryEvents(_ string, _ []interface{}, _ string, _, _ int) (
 func (m *mockStore) CountEvents(_ string, _ []interface{}) (int64, error) { return 0, nil }
 func (m *mockStore) UpdateEvent(_ int64, _ map[string]interface{}) error  { return nil }
 func (m *mockStore) ToggleBookmark(_ int64) (int64, error)                { return 0, nil }
-func (m *mockStore) ExecuteQuery(_ string, _ []interface{}, _ *database.NotesFilter) ([]*model.Event, error) {
+func (m *mockStore) ExecuteQuery(_ string, _ []interface{}) ([]*model.Event, error) {
 	return nil, nil
 }
-func (m *mockStore) ExecuteCountQuery(_ string, _ []interface{}, _ *database.NotesFilter) (int64, error) {
+func (m *mockStore) ExecuteCountQuery(_ string, _ []interface{}) (int64, error) {
 	return 0, nil
 }
 func (m *mockStore) GetDistinctValues(_ string) (map[string]int64, error) { return nil, nil }
@@ -53,7 +53,7 @@ func (m *mockStore) GetMinMaxDate() (string, string, error) { return "", "", nil
 func (m *mockStore) GetMinMaxDateFiltered(_ string, _ []interface{}) (string, string, error) {
 	return "", "", nil
 }
-func (m *mockStore) GetTimelineHistogram(_ string, _ []interface{}) ([]database.TimelineBucket, error) {
+func (m *mockStore) GetTimelineHistogram(_ string, _ []interface{}, _ *database.HistogramWindow) ([]database.TimelineBucket, error) {
 	return nil, nil
 }
 func (m *mockStore) GetSavedQueries() ([]database.SavedQuery, error)       { return nil, nil }

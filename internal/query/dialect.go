@@ -21,6 +21,12 @@ type QueryDialect interface {
 	// SQLite returns the name unchanged. PostgreSQL wraps reserved words
 	// (user, desc, offset) in double quotes.
 	QuoteColumn(name string) string
+
+	// NoteDatetimeSQL returns the expression that reads an examiner note's
+	// datetime column as "YYYY-MM-DD HH:MM:SS". SQLite stores note datetimes as
+	// typed, and older notes may hold a pasted "2009-07-14T04:58:36Z", which
+	// compares after every same-day space form. PostgreSQL returns the column.
+	NoteDatetimeSQL(column string) string
 }
 
 // sqliteQueryDialect is the default dialect, producing SQLite-compatible SQL.
@@ -32,6 +38,16 @@ func (d sqliteQueryDialect) QuoteColumn(name string) string { return name }
 
 func (d sqliteQueryDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 	return "(datetime BETWEEN datetime(?) AND datetime(?))"
+}
+
+func (d sqliteQueryDialect) NoteDatetimeSQL(column string) string {
+	return SQLiteNoteDatetime(column)
+}
+
+// SQLiteNoteDatetime rewrites the ISO "T" separator and "Z" suffix that a
+// pasted grid timestamp carries. database.SQLiteDialect shares it.
+func SQLiteNoteDatetime(column string) string {
+	return "replace(replace(" + column + ", 'T', ' '), 'Z', '')"
 }
 
 // DefaultDialect is the query dialect used when none is explicitly set.

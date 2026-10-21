@@ -2,6 +2,39 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.18.0 (2026-10-21)
+
+### Behavior changes (query results may differ from v0.17.0)
+
+- **Examiner notes now filter like timeline events, in simple and advanced mode.** Each note behaves as a row with source `EXAMINER`, sourcetype `Examiner Note`, its description as desc, its own datetime, tag, color, and bookmark, and every other field empty. Consequences:
+  - Advanced search conditions now apply to notes. Before, any clause without a source condition showed every note.
+  - Simple OR filters on fields notes don't have (host, user, and so on) no longer hide all notes: `host = WS1 OR color = RED` shows red notes.
+  - Keyword search now filters notes. On SQLite, searching "examiner" or "note" matches every note. Keyword search is case-sensitive on PostgreSQL, so search "EXAMINER" or "Examiner Note" there.
+  - `source LIKE` and `source NOT LIKE` now match notes normally, and `source = 'examiner'` (lowercase) no longer matches them.
+  - `sourcetype = 'Examiner Note'` selects notes.
+- **Simple mode with OR logic: keyword search, bookmark-only, and the date range now narrow the results instead of widening them.** Before, they were ORed with your filters, so OR filters plus a date range could show events outside the range. Affects the grid, count, export, and histogram.
+- **Keyword search now covers the URL field in the grid and export** (the histogram already did).
+- **Histogram: a LIKE tab pivot now matches the grid** (wrapped as `%value%`), and in advanced mode a pivot operator other than `=` or `LIKE` is an error, as it already was for export.
+
+### New
+
+- **Examiner notes lane in the timeline histogram.** A strip below the bars has a marker for each time slot containing notes. Notes never add to bar heights, which count timeline events only. The tooltip shows both counts. Clicking a marker sets the date range like clicking a bar (simple mode). Window rules:
+  - with a date range set, the chart covers that range and shows every note in it
+  - with no date range, the chart covers the span of the matching events, and notes outside that span are listed in the grid but not drawn
+  - a filter matching only notes scales the chart to those notes
+- **Add Note dialog: the date and time are UTC.** Accepted: `YYYY-MM-DD HH:MM:SS`, or a timestamp pasted from the grid (`2009-07-14T04:58:36Z`). Rejected with a message: time zone offsets (never converted), fractional seconds, date-only input, and invalid dates. New notes are stored in the standard format.
+
+### Fixes
+
+- An advanced clause containing the text `order by` (for example `desc LIKE '% order by %'`) failed with a syntax error.
+- On SQLite, notes whose time had been pasted from the grid were stored as `…T…Z`, dropped out of date ranges ending on their own day, and sorted out of place within that day. Existing notes are now read correctly with no stored data changed, and new notes are stored in the standard format.
+
+### Internal
+
+- Both examiner-notes filtering engines were replaced by one query that adds notes to the timeline before any filter runs.
+- A filter matrix test suite (golden cases plus about 23,000 generated cases) runs on SQLite in every `go test ./...`, and on PostgreSQL when `TEST_PG_DSN` is set. A query plan check fails the tests if the grid or count stops using its indexes.
+- Pre-existing gofmt drift fixed.
+
 ## v0.17.0 (2026-10-20)
 
 ### Added

@@ -24,7 +24,7 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 - Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
 - Filter panel with AND/OR logic, date range, and multi-field filters
-- Timeline histogram with click-to-filter and drag-to-select range
+- Timeline histogram with click-to-filter and drag-to-select range, plus an examiner notes lane below the bars
 - Resizable event detail panel with editable tags, colors, and notes
 - Bookmark events with star toggle (filter to show bookmarked only)
 - Color-coded rows for marking events of interest
@@ -102,6 +102,8 @@ cd /workspace && wails build -tags webkit2_41
 
 Run the binary on the host: `~/source/4n6time-go/build/bin/4n6time`
 
+Tests: `go test ./...` includes the notes matrix (about a minute on SQLite); set `TEST_PG_DSN` to also run it against PostgreSQL; `go test -short ./...` skips the generated cases.
+
 ## Usage
 
 1. Launch the application
@@ -125,7 +127,7 @@ Right-click any row in the event grid to open a context menu with "Search in new
 
 ### Examiner Notes
 
-Add timestamped investigation notes directly into the timeline alongside evidence events. Click the **+** button in the toolbar to open the Add Note dialog. Enter a date/time (or click "Now"), a description, and an optional tag. Notes appear in the grid with source "EXAMINER" and can be color-coded and bookmarked. Notes are immutable after creation; to change one, delete it from the detail panel and re-enter it.
+Add timestamped investigation notes directly into the timeline alongside evidence events. Click the **+** button in the toolbar to open the Add Note dialog and enter a date/time and a description. The date/time is UTC, typed as `YYYY-MM-DD HH:MM:SS` or pasted from the grid (`2009-07-14T04:58:36Z`); time zone offsets, fractional seconds, and date-only input are rejected. Notes appear in the grid with source "EXAMINER" and sourcetype "Examiner Note", and in a lane below the timeline histogram bars. They filter exactly like timeline events, in simple and advanced search, and can be color-coded and bookmarked. Notes are immutable after creation; to change one, delete it from the detail panel and re-enter it.
 
 ### Advanced Search
 

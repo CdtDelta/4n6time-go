@@ -38,6 +38,9 @@ func (d *PostgresDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 		d.Placeholder(paramIdx1), d.Placeholder(paramIdx2))
 }
 
+// NoteDatetimeSQL returns the column unchanged: TIMESTAMP stores a parsed value.
+func (d *PostgresDialect) NoteDatetimeSQL(column string) string { return column }
+
 func (d *PostgresDialect) DateFormatSQL(column, format string) string {
 	pgFmt, ok := strftimeToPostgres[format]
 	if !ok {

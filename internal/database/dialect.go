@@ -24,6 +24,10 @@ type Dialect interface {
 	// paramIdx1 and paramIdx2 are the 1-based parameter indices.
 	DateBetweenSQL(paramIdx1, paramIdx2 int) string
 
+	// NoteDatetimeSQL reads an examiner note's datetime column as
+	// "YYYY-MM-DD HH:MM:SS". It matches query.QueryDialect.NoteDatetimeSQL.
+	NoteDatetimeSQL(column string) string
+
 	// DateFormatSQL returns a SQL expression that formats/truncates a datetime column.
 	// SQLite uses strftime; PostgreSQL uses to_char or date_trunc.
 	DateFormatSQL(column, format string) string

@@ -2,18 +2,19 @@ package database
 
 import "github.com/cdtdelta/4n6time/internal/model"
 
-// TimelineBucket represents a single histogram bucket with a timestamp label and event count.
+// TimelineBucket is one histogram bucket: its timestamp label, the evidence
+// count, and the examiner notes count. The two counts are never summed.
 type TimelineBucket struct {
-	Timestamp string `json:"timestamp"`
-	Count     int64  `json:"count"`
+	Timestamp  string `json:"timestamp"`
+	Count      int64  `json:"count"`
+	NotesCount int64  `json:"notesCount"`
 }
 
-// NotesFilter carries the WHERE clause and parameter values applied to the examiner_notes
-// side of a UNION ALL query. Column names must be native examiner_notes names
-// (e.g. "description" rather than "desc"). Use nil to apply no filter to notes.
-type NotesFilter struct {
-	SQL  string
-	Args []interface{}
+// HistogramWindow is an explicit histogram range, as "YYYY-MM-DD HH:MM:SS"
+// text. When set, it fixes the bucket format and the window that notes must
+// fall in, instead of the matching evidence's range.
+type HistogramWindow struct {
+	From, To string
 }
 
 // Store defines the interface for all database operations.
@@ -28,12 +29,12 @@ type Store interface {
 	UpdateEvent(id int64, fields map[string]interface{}) error
 	ToggleBookmark(id int64) (int64, error)
 
-	// Query execution for pre-built SQL (from query.go Build).
+	// Query execution for pre-built SQL from the query package, run as given.
 	// The scan order matches model.Fields: rowid, datetime, timezone, MACB, ...
-	// notesFilter, when non-nil, applies a WHERE clause to the examiner_notes side
-	// of the UNION ALL so the two result sets stay consistent with the main filters.
-	ExecuteQuery(sql string, args []interface{}, notesFilter *NotesFilter) ([]*model.Event, error)
-	ExecuteCountQuery(sql string, args []interface{}, notesFilter *NotesFilter) (int64, error)
+	// Whether examiner notes appear is decided by the SQL alone: Build reads
+	// log2timeline only, and BuildCombined reads evidence UNION ALL notes.
+	ExecuteQuery(sql string, args []interface{}) ([]*model.Event, error)
+	ExecuteCountQuery(sql string, args []interface{}) (int64, error)
 
 	// Metadata and filters
 	GetDistinctValues(field string) (map[string]int64, error)
@@ -41,7 +42,7 @@ type Store interface {
 	GetDistinctTags() ([]string, error)
 	GetMinMaxDate() (string, string, error)
 	GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (string, string, error)
-	GetTimelineHistogram(whereClause string, whereArgs []interface{}) ([]TimelineBucket, error)
+	GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error)
 
 	// Saved queries
 	GetSavedQueries() ([]SavedQuery, error)

@@ -50,12 +50,12 @@ function AddNoteDialog({ visible, onClose, onAdded }) {
         </div>
         <div className="add-note-content">
           <div className="add-note-field">
-            <label>Date/Time</label>
+            <label>Date/Time (UTC)</label>
             <input
               type="text"
               value={datetime}
               onChange={(e) => setDatetime(e.target.value)}
-              placeholder="YYYY-MM-DD HH:MM:SS"
+              placeholder="2009-07-14 04:58:36"
             />
           </div>
           <div className="add-note-field">
