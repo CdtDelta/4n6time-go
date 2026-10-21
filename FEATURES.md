@@ -49,3 +49,5 @@ Last updated: 2026-02-16
 | v0.9.0 | Enhanced pagination controls (First, Last, Go-to-page input, "Page X of Y" display) |
 | v0.9.0 | Logging system (Help > Logging, file output, optional persistence between sessions) |
 | v0.9.0 | Export CSV respects bookmark-only and search text filters |
+| v0.17.0 | mac_apt CSV and JSONL import (21 timeline sources, Spotlight stores, recursive import with CSV/JSONL dedupe, untimed outputs skipped) |
+| v0.17.0 | Unparseable timestamp reporting (recursive summary counts, single-file notice, logged examples) |

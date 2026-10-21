@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { GetLoggingStatus } from '../../wailsjs/go/main/App'
 
 const OTHER_FAMILY = 'Other'
 
@@ -10,12 +11,13 @@ function groupByFamily(perTool, toolFamilies) {
   for (const [tool, stats] of Object.entries(perTool)) {
     const family = toolFamilies[tool] || OTHER_FAMILY
     if (!groups[family]) {
-      groups[family] = { family, tools: [], fileCount: 0, eventCount: 0 }
+      groups[family] = { family, tools: [], fileCount: 0, eventCount: 0, unparseableCount: 0 }
     }
     const g = groups[family]
     g.tools.push([tool, stats])
     g.fileCount += stats.fileCount || 0
     g.eventCount += stats.eventCount || 0
+    g.unparseableCount += stats.unparseableCount || 0
   }
   for (const g of Object.values(groups)) {
     g.tools.sort(([a], [b]) => a.localeCompare(b))
@@ -27,8 +29,39 @@ function groupByFamily(perTool, toolFamilies) {
   })
 }
 
+// unparseableNote returns the suffix shown after an event count, or nothing
+// when the count is zero, so clean imports render exactly as before.
+function unparseableNote(count) {
+  if (!count) return null
+  return ` (${count.toLocaleString()} unparseable)`
+}
+
 export default function RecursiveImportSummaryDialog({ visible, summary, onClose }) {
   const [skippedExpanded, setSkippedExpanded] = useState(false)
+  const [unparseableExpanded, setUnparseableExpanded] = useState(false)
+  // loggingOff is set only after GetLoggingStatus answers with logging disabled.
+  // It stays false while the call is pending or if the call fails.
+  const [loggingOff, setLoggingOff] = useState(false)
+
+  const unparseableFiles = (summary && summary.unparseableFiles) || []
+  const hasUnparseable = unparseableFiles.length > 0
+
+  // Ask for the logging state once when the dialog opens with unparseable
+  // files to report. Clean imports make no call.
+  useEffect(() => {
+    if (!visible || !summary || !hasUnparseable) return
+    let cancelled = false
+    const check = async () => {
+      try {
+        const status = await GetLoggingStatus()
+        if (!cancelled) setLoggingOff(!status.enabled)
+      } catch {
+        if (!cancelled) setLoggingOff(false)
+      }
+    }
+    check()
+    return () => { cancelled = true }
+  }, [visible, summary, hasUnparseable])
 
   if (!visible || !summary) return null
 
@@ -84,17 +117,51 @@ export default function RecursiveImportSummaryDialog({ visible, summary, onClose
                       <tr key={tool}>
                         <td style={{ paddingLeft: '1.5em' }}>{tool}</td>
                         <td>{stats.fileCount}</td>
-                        <td>{(stats.eventCount || 0).toLocaleString()}</td>
+                        <td>{(stats.eventCount || 0).toLocaleString()}{unparseableNote(stats.unparseableCount)}</td>
                       </tr>
                     ))}
                     <tr style={{ fontStyle: 'italic' }}>
                       <td style={{ paddingLeft: '1.5em' }}>{group.family} subtotal</td>
                       <td>{group.fileCount}</td>
-                      <td>{group.eventCount.toLocaleString()}</td>
+                      <td>{group.eventCount.toLocaleString()}{unparseableNote(group.unparseableCount)}</td>
                     </tr>
                   </tbody>
                 ))}
               </table>
+            </div>
+          )}
+
+          {unparseableFiles.length > 0 && (
+            <div className="recursive-summary-section">
+              <button
+                className="recursive-skipped-toggle"
+                onClick={() => setUnparseableExpanded(prev => !prev)}
+              >
+                {unparseableExpanded ? '-' : '+'} Files with unparseable timestamps ({unparseableFiles.length})
+              </button>
+              {unparseableExpanded && (
+                <table className="recursive-summary-table recursive-skipped-table">
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Unparseable</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unparseableFiles.map((uf, i) => (
+                      <tr key={i}>
+                        <td className="recursive-skipped-path">{uf.relativePath}</td>
+                        <td>{(uf.count || 0).toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              {unparseableExpanded && loggingOff && (
+                <p style={{ fontStyle: 'italic' }}>
+                  Enable Help &gt; Logging and re-import to record which values were skipped.
+                </p>
+              )}
             </div>
           )}
 

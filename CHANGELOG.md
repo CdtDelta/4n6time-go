@@ -2,6 +2,14 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.17.0 (2026-10-20)
+
+### Added
+
+- **mac_apt import (CSV and JSONL).** Output from ydkhatri's mac_apt (tested with v1.36.2) is imported through `internal/macaptparser`. Twenty fixed-schema outputs and the Spotlight store files produce timeline events, with one event per parseable timestamp column. Network_Details, Network_Interfaces, and FileSharing are recognized but have no timestamps, so folder import lists them as skipped. SQLite, TSV, and XLSX output is not supported.
+- **mac_apt recursive import and dedupe.** mac_apt CSV and JSONL files are recursive formats in their own family, so Import Folder (Recursive) groups them in the summary. A CSV and JSONL with the same base name and output in one directory import once, keeping the JSONL.
+- **Unparseable timestamp reporting.** The count of timestamp values that do not parse is reported three ways. The recursive summary shows it after each tool's and family's event count. A single-file import shows a notice whose text depends on whether logging was on at import time. When logging is on, the log records up to 10 examples per file as `row <n>, column <name>: "<value>"`. Only the mac_apt parser reports the count today.
+
 ## v0.16.1 (2026-10-19)
 
 ### Bug fixes

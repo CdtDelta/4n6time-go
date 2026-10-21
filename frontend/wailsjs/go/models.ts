@@ -19,6 +19,20 @@ export namespace database {
 
 export namespace importer {
 	
+	export class UnparseableFile {
+	    relativePath: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UnparseableFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.relativePath = source["relativePath"];
+	        this.count = source["count"];
+	    }
+	}
 	export class SkippedFile {
 	    relativePath: string;
 	    reason: string;
@@ -36,6 +50,7 @@ export namespace importer {
 	export class ToolStats {
 	    fileCount: number;
 	    eventCount: number;
+	    unparseableCount: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ToolStats(source);
@@ -45,11 +60,13 @@ export namespace importer {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.fileCount = source["fileCount"];
 	        this.eventCount = source["eventCount"];
+	        this.unparseableCount = source["unparseableCount"];
 	    }
 	}
 	export class ImportSummary {
 	    perTool: Record<string, ToolStats>;
 	    skippedFiles: SkippedFile[];
+	    unparseableFiles: UnparseableFile[];
 	    totalEvents: number;
 	    totalFilesProcessed: number;
 	    directoriesWalked: number;
@@ -64,6 +81,7 @@ export namespace importer {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.perTool = this.convertValues(source["perTool"], ToolStats, true);
 	        this.skippedFiles = this.convertValues(source["skippedFiles"], SkippedFile);
+	        this.unparseableFiles = this.convertValues(source["unparseableFiles"], UnparseableFile);
 	        this.totalEvents = source["totalEvents"];
 	        this.totalFilesProcessed = source["totalFilesProcessed"];
 	        this.directoriesWalked = source["directoriesWalked"];
@@ -90,6 +108,7 @@ export namespace importer {
 		}
 	}
 	
+	
 
 }
 
@@ -101,6 +120,9 @@ export namespace main {
 	    eventCount: number;
 	    minDate: string;
 	    maxDate: string;
+	    importedEvents: number;
+	    importUnparseable: number;
+	    importLogEnabled: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DBInfo(source);
@@ -113,6 +135,9 @@ export namespace main {
 	        this.eventCount = source["eventCount"];
 	        this.minDate = source["minDate"];
 	        this.maxDate = source["maxDate"];
+	        this.importedEvents = source["importedEvents"];
+	        this.importUnparseable = source["importUnparseable"];
+	        this.importLogEnabled = source["importLogEnabled"];
 	    }
 	}
 	export class FilterItem {

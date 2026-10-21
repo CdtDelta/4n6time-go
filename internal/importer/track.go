@@ -64,6 +64,10 @@ type TrackedResult struct {
 	ID int64
 	// Count is the number of events the import reported inserting.
 	Count int
+	// Unparseable is the parser's count of non-empty timestamp values it
+	// skipped (Progress.Unparseable). It is zero for formats that do not
+	// report one, and set only by ImportFile.
+	Unparseable int
 	// ImportErr is the error from the import itself. The row is then marked failed.
 	ImportErr error
 	// RecordErr is the error from creating or finalizing the row. When ID is
@@ -112,6 +116,17 @@ func runTracked(store database.Store, spec trackedSpec, logf Logger, run func(da
 	return res
 }
 
+// logUnparseableExamples writes the skipped-value examples for one file as a
+// single log line, so the examples stay together. It does nothing when the
+// parser reported none.
+func logUnparseableExamples(logf Logger, name string, p *Progress) {
+	if p == nil || len(p.UnparseableExamples) == 0 {
+		return
+	}
+	logAt(logf, "INFO", fmt.Sprintf("%s: unparseable timestamp examples: %s",
+		name, strings.Join(p.UnparseableExamples, "; ")))
+}
+
 // ImportFile imports one file through format as a tracked import. The
 // filename is the file's base name. formatLabel is the label DetectFile returned
 // for the file (the per-tool name for EZ Tools, the entry name otherwise), so
@@ -129,6 +144,14 @@ func ImportFile(path string, format *Format, formatLabel, label string, store da
 	}, logf, func(s database.Store) (int, error) {
 		return format.Import(path, s, p)
 	})
+	if p != nil {
+		res.Unparseable = p.Unparseable
+	}
+	if p != nil && p.Unparseable > 0 {
+		logAt(logf, "INFO", fmt.Sprintf("%s: %d unparseable timestamp value(s) skipped",
+			filepath.Base(path), p.Unparseable))
+	}
+	logUnparseableExamples(logf, filepath.Base(path), p)
 	switch {
 	case res.RecordErr != nil && res.ID == 0:
 		return res, res.RecordErr

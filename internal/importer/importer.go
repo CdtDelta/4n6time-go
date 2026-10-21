@@ -14,6 +14,7 @@ import (
 	"github.com/cdtdelta/4n6time/internal/dynamicparser"
 	"github.com/cdtdelta/4n6time/internal/eztoolparser"
 	"github.com/cdtdelta/4n6time/internal/jsonlparser"
+	"github.com/cdtdelta/4n6time/internal/macaptparser"
 	"github.com/cdtdelta/4n6time/internal/model"
 	"github.com/cdtdelta/4n6time/internal/tlnparser"
 	"github.com/cdtdelta/4n6time/internal/unifiedlogparser"
@@ -29,12 +30,15 @@ const (
 
 	FormatUnifiedLogCSV   = "UnifiedLog (CSV)"
 	FormatUnifiedLogJSONL = "UnifiedLog (JSONL)"
+	FormatMacAptCSV       = "mac_apt (CSV)"
+	FormatMacAptJSONL     = "mac_apt (JSONL)"
 )
 
 // Tool family names used to group the recursive import summary.
 const (
 	FamilyEZTools    = "EZ Tools"
 	FamilyUnifiedLog = "UnifiedLog"
+	FamilyMacApt     = "mac_apt"
 )
 
 // ErrUnrecognizedFormat is returned by DetectFile when no registry entry
@@ -43,6 +47,11 @@ var ErrUnrecognizedFormat = errors.New("unrecognized file format: not a valid L2
 
 // Progress carries optional import callbacks. A nil *Progress, or any nil
 // field, disables that callback.
+//
+// Unparseable is the one output field: a parser sets it during Import to the
+// number of non-empty timestamp values it could not parse and so skipped.
+// Callers read it after Import returns. Parsers with no such count leave it
+// zero, and callers must pass a non-nil Progress to receive it.
 type Progress struct {
 	// Reading is called periodically while the parser reads the file.
 	Reading func(count int)
@@ -52,6 +61,20 @@ type Progress struct {
 	InsertStart func(total int)
 	// Inserting is called periodically during database insertion.
 	Inserting func(count, total int)
+
+	// Unparseable is set by the parser; see the type comment.
+	Unparseable int
+	// UnparseableExamples describes up to 10 of the skipped values, for the
+	// log. Set by parsers that report examples; empty otherwise.
+	UnparseableExamples []string
+}
+
+// setUnparseable records a parser's unparseable-timestamp count. A nil
+// receiver ignores it, so parsers can call it unconditionally.
+func (p *Progress) setUnparseable(n int) {
+	if p != nil {
+		p.Unparseable = n
+	}
 }
 
 func (p *Progress) reading() func(int) {
@@ -130,7 +153,9 @@ func (f *Format) hasExtension(ext string) bool {
 // UnifiedLog JSONL precedes Plaso JSONL because a Unified Log record also
 // satisfies Plaso's psort shape check (it has "timestamp" and "message").
 // UnifiedLog CSV precedes EZ Tools CSV; its required columns do not occur in
-// any EZ Tools header.
+// any EZ Tools header. mac_apt JSONL sits after UnifiedLog JSONL and before
+// Plaso JSONL, and mac_apt CSV after UnifiedLog CSV and before EZ Tools CSV.
+// Plaso JSONL stays the last .jsonl claimant so its error text is unchanged.
 //
 // The UnifiedLog entries leave HasTimeline nil: every record they import has
 // a timestamp, and records without one are skipped during parsing.
@@ -143,6 +168,16 @@ var Registry = []Format{
 		Import:     importUnifiedLogJSONL,
 		Recursive:  true,
 		Family:     FamilyUnifiedLog,
+	},
+	{
+		Name:        FormatMacAptJSONL,
+		Extensions:  []string{".jsonl"},
+		Exclusive:   true,
+		Detect:      detectMacAptJSONL,
+		HasTimeline: macaptparser.HasTimeline,
+		Import:      importMacAptJSONL,
+		Recursive:   true,
+		Family:      FamilyMacApt,
 	},
 	{
 		Name:       FormatJSONL,
@@ -165,6 +200,15 @@ var Registry = []Format{
 		Import:     importUnifiedLogCSV,
 		Recursive:  true,
 		Family:     FamilyUnifiedLog,
+	},
+	{
+		Name:        FormatMacAptCSV,
+		Extensions:  []string{".csv"},
+		Detect:      detectMacAptCSV,
+		HasTimeline: macaptparser.HasTimeline,
+		Import:      importMacAptCSV,
+		Recursive:   true,
+		Family:      FamilyMacApt,
 	},
 	{
 		Name:        FormatEZTools,
@@ -288,6 +332,60 @@ func importUnifiedLogCSV(path string, store database.Store, p *Progress) (int, e
 	if err != nil {
 		return 0, fmt.Errorf("reading UnifiedLog CSV: %w", err)
 	}
+	return insertEvents(store, result.Events, p)
+}
+
+// --- mac_apt CSV ---
+
+func detectMacAptCSV(path string) (string, bool, error) {
+	label, ok, err := macaptparser.DetectCSV(path)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return label, true, nil
+}
+
+func importMacAptCSV(path string, store database.Store, p *Progress) (int, error) {
+	result, err := macaptparser.ReadCSV(path, p.reading())
+	if err != nil {
+		return 0, fmt.Errorf("reading mac_apt CSV: %w", err)
+	}
+	reportMacAptRead(p, result)
+	return insertEvents(store, result.Events, p)
+}
+
+// reportMacAptRead passes a mac_apt read's unparseable count to the caller
+// and, when there are any, emits a status line so the skip is visible.
+func reportMacAptRead(p *Progress, result *macaptparser.ReadResult) {
+	p.setUnparseable(result.UnparseableTimestamps)
+	if p != nil {
+		p.UnparseableExamples = result.UnparseableExamples
+	}
+	if result.UnparseableTimestamps > 0 {
+		p.status(fmt.Sprintf("Parsed %d events; %d unparseable timestamp value(s) skipped",
+			result.Count, result.UnparseableTimestamps), result.Count)
+	}
+}
+
+// --- mac_apt JSONL ---
+
+func detectMacAptJSONL(path string) (string, bool, error) {
+	if strings.ToLower(filepath.Ext(path)) != ".jsonl" {
+		return "", false, nil
+	}
+	label, ok, err := macaptparser.DetectJSONL(path)
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return label, true, nil
+}
+
+func importMacAptJSONL(path string, store database.Store, p *Progress) (int, error) {
+	result, err := macaptparser.ReadJSONL(path, p.reading())
+	if err != nil {
+		return 0, fmt.Errorf("reading mac_apt JSONL: %w", err)
+	}
+	reportMacAptRead(p, result)
 	return insertEvents(store, result.Events, p)
 }
 

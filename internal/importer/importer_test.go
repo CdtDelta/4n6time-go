@@ -6,13 +6,13 @@ import (
 )
 
 // TestRegistryOrder pins the detection order. The original five entries keep
-// their historic relative order from app.go; UnifiedLog JSONL sits before
-// Plaso JSONL and UnifiedLog CSV before EZ Tools. Dynamic CSV is a catch-all
-// and must be last.
+// their historic relative order from app.go; UnifiedLog JSONL and mac_apt
+// JSONL sit before Plaso JSONL, and UnifiedLog CSV and mac_apt CSV before EZ
+// Tools. Dynamic CSV is a catch-all and must be last.
 func TestRegistryOrder(t *testing.T) {
 	want := []string{
-		FormatUnifiedLogJSONL, FormatJSONL, FormatTLN,
-		FormatUnifiedLogCSV, FormatEZTools, FormatL2TCSV, FormatDynamicCSV,
+		FormatUnifiedLogJSONL, FormatMacAptJSONL, FormatJSONL, FormatTLN,
+		FormatUnifiedLogCSV, FormatMacAptCSV, FormatEZTools, FormatL2TCSV, FormatDynamicCSV,
 	}
 
 	if len(Registry) != len(want) {
@@ -28,14 +28,16 @@ func TestRegistryOrder(t *testing.T) {
 	}
 }
 
-// TestRegistryRecursiveFlag verifies only EZ Tools and the two UnifiedLog
-// entries are eligible for recursive folder import. Plaso JSONL and the
-// catch-all CSV formats must stay out.
+// TestRegistryRecursiveFlag verifies only EZ Tools, the two UnifiedLog
+// entries, and the two mac_apt entries are eligible for recursive folder
+// import. Plaso JSONL and the catch-all CSV formats must stay out.
 func TestRegistryRecursiveFlag(t *testing.T) {
 	recursive := map[string]bool{
 		FormatEZTools:         true,
 		FormatUnifiedLogCSV:   true,
 		FormatUnifiedLogJSONL: true,
+		FormatMacAptCSV:       true,
+		FormatMacAptJSONL:     true,
 	}
 	for _, f := range Registry {
 		if f.Recursive != recursive[f.Name] {
@@ -51,6 +53,8 @@ func TestRegistryFamilies(t *testing.T) {
 		FormatEZTools:         FamilyEZTools,
 		FormatUnifiedLogCSV:   FamilyUnifiedLog,
 		FormatUnifiedLogJSONL: FamilyUnifiedLog,
+		FormatMacAptCSV:       FamilyMacApt,
+		FormatMacAptJSONL:     FamilyMacApt,
 	}
 	for _, f := range Registry {
 		if f.Family != want[f.Name] {
@@ -81,8 +85,9 @@ func TestRegistryEntriesComplete(t *testing.T) {
 }
 
 // TestRecursiveExtensions verifies the recursive extension filter is derived
-// from the registry: .csv from EZ Tools and UnifiedLog CSV, .jsonl from
-// UnifiedLog JSONL. Plaso's .json must not appear.
+// from the registry: .csv from EZ Tools, UnifiedLog CSV, and mac_apt CSV, and
+// .jsonl from UnifiedLog JSONL and mac_apt JSONL. Plaso's .json must not
+// appear.
 func TestRecursiveExtensions(t *testing.T) {
 	exts := recursiveExtensions(recursiveFormats())
 	if len(exts) != 2 {

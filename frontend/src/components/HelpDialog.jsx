@@ -14,7 +14,7 @@ Import Timeline: Choose a timeline file, enter an optional label (for example, t
 
 PostgreSQL: Connects to a PostgreSQL server. Click the PostgreSQL button on the welcome screen. See the PostgreSQL Support section for details.
 
-Import Folder (Recursive): Walks the selected folder up to 3 levels deep and imports every supported EZ Tools CSV and macOS Unified Log file. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen. See the Recursive Folder Import section for details.
+Import Folder (Recursive): Walks the selected folder up to 3 levels deep and imports every supported EZ Tools CSV, macOS Unified Log, and mac_apt file. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen. See the Recursive Folder Import section for details.
 
 Supported import formats:
 - CSV: Standard log2timeline/Plaso CSV output (comma-delimited with standard forensic timeline columns)
@@ -24,6 +24,7 @@ Supported import formats:
 - Dynamic CSV: Plaso default output with variable columns defined by header row
 - EZ Tools CSV: Output from Eric Zimmerman's tools (EvtxECmd, PECmd, LECmd, JLECmd, SBECmd, MFTECmd, AmcacheParser, SrumECmd, RBCmd, WxTCmd, AppCompatCacheParser; 28 subtypes). Auto-detected when importing single files; use Import Folder (Recursive) for batch import.
 - macOS Unified Log: CSV and JSONL output from Mandiant's unifiedlog_iterator. Auto-detected when importing single files and picked up by Import Folder (Recursive). See the macOS Unified Log Import section.
+- mac_apt: CSV and JSONL output from ydkhatri's mac_apt. Auto-detected when importing single files and picked up by Import Folder (Recursive). See the mac_apt Import section.
 
 After import, events are stored in the database (SQLite or PostgreSQL) for fast querying and can be reopened at any time without reimporting.`
   },
@@ -238,7 +239,7 @@ Note: There is no undo for an import. If you import the wrong file, you would ne
 
 Labels: After you choose a file or folder, the import dialog asks for an optional label, for example the host the data came from. The field is pre-filled with the file name without its extension, or with the folder name. Press Enter to import, or Escape to cancel. Cancelling either dialog imports nothing.
 
-Recursive folder import: Each file imported from the folder gets its own record, labeled with the label you enter. Skipped files get no record, including unrecognized formats and duplicate Unified Log exports. A file that failed to parse gets a record with status failed.
+Recursive folder import: Each file imported from the folder gets its own record, labeled with the label you enter. Skipped files get no record, including unrecognized formats and duplicate Unified Log or mac_apt exports. A file that failed to parse gets a record with status failed.
 
 Import section: The event detail panel has a read-only Import section with the label, file, format, and import time. Events from before v0.16.0 show "Imported before v0.16.0 (no import record)". Examiner notes have no Import section.
 
@@ -354,15 +355,19 @@ Database compatibility: EZ Tool imports work with both SQLite and PostgreSQL dat
     title: 'Recursive Folder Import',
     content: `Import Folder (Recursive) imports every supported file in a folder tree at once, such as a KAPE collection or a folder of tool output. Use File > Import Folder (Recursive) or the Import Folder (Recursive) button on the welcome screen.
 
-What it imports: EZ Tools CSV files and macOS Unified Log CSV and JSONL files. Other formats (L2T CSV, Plaso JSONL, TLN, dynamic CSV) are imported one file at a time with Import Timeline.
+What it imports: EZ Tools CSV files, macOS Unified Log CSV and JSONL files, and mac_apt CSV and JSONL files. Other formats (L2T CSV, Plaso JSONL, TLN, dynamic CSV) are imported one file at a time with Import Timeline.
 
 Depth: The import walks up to 3 levels below the selected folder (the selected folder is depth 0). Symlinks are not followed.
 
-Summary: When the import finishes, a summary dialog shows the total events imported and a per-tool breakdown grouped by tool family (EZ Tools, UnifiedLog), with a subtotal for each family. Tools without a family appear under Other.
+Summary: When the import finishes, a summary dialog shows the total events imported and a per-tool breakdown grouped by tool family (EZ Tools, UnifiedLog, mac_apt), with a subtotal for each family. Tools without a family appear under Other.
 
-Skipped files: Expand the skipped files list to see every file that was not imported and the reason: unrecognized format, empty file, parse error, recognized but no timestamp columns (MFTECmd $Boot and $SDS, WxTCmd PackageIDs), or duplicate.
+Unparseable timestamps: A timestamp value that cannot be read produces no event, but the rest of its row still imports. The summary shows the count in parentheses after the event count for each tool and each family. A collapsible section between the per-tool breakdown and the skipped files lists each file that had skipped values, with its count. The examples of the skipped values go to the log. If logging was off, the section says to enable Help > Logging and import again.
 
-Duplicate Unified Log exports: A collection often holds both the CSV and JSONL output of the same unifiedlog_iterator run. Importing both would double every event, so duplicates are imported once. A CSV and a JSONL with the same base name in one directory are duplicates, as are files whose first record has the same boot UUID, timestamp (to the millisecond), and process UUID. The JSONL file is kept because it carries everything the CSV does plus message flags and evidence. Skipped copies are listed as "duplicate of <file> (same UnifiedLog data)". Files that only share a boot UUID are not duplicates, since separate collections from the same boot share it.`
+Skipped files: Expand the skipped files list to see every file that was not imported and the reason: unrecognized format, empty file, parse error, recognized but no timestamp columns (MFTECmd $Boot and $SDS, WxTCmd PackageIDs, and the mac_apt outputs Network_Details, Network_Interfaces, and FileSharing), or duplicate.
+
+Duplicate Unified Log exports: A collection often holds both the CSV and JSONL output of the same unifiedlog_iterator run. Importing both would double every event, so duplicates are imported once. A CSV and a JSONL with the same base name in one directory are duplicates, as are files whose first record has the same boot UUID, timestamp (to the millisecond), and process UUID. The JSONL file is kept because it carries everything the CSV does plus message flags and evidence. Skipped copies are listed as "duplicate of <file> (same UnifiedLog data)". Files that only share a boot UUID are not duplicates, since separate collections from the same boot share it.
+
+Duplicate mac_apt exports: A CSV and a JSONL of the same mac_apt output, with the same base name in one folder, import once. The JSONL file is kept, and the CSV is listed as "duplicate of <file> (same mac_apt data)". Untimed mac_apt outputs (Network_Details, Network_Interfaces, and FileSharing) have no timeline data, so each copy is listed in the skipped files with the reason "no timestamp columns".`
   },
   {
     id: 'unifiedlog-import',
@@ -378,6 +383,23 @@ Extra column: The extra column starts with the full-precision source timestamp, 
 Timestamps: The datetime column is second precision, the same as every other format. Use the timestamp entry in the extra column when you need sub-second ordering.
 
 Skipped records: Records with no usable timestamp are skipped during import.`
+  },
+  {
+    id: 'macapt-import',
+    title: 'mac_apt Import',
+    content: `4n6time imports the CSV and JSONL output of ydkhatri's mac_apt (tested with v1.36.2). Choose CSV or JSONL output when you run mac_apt. The SQLite (.db), TSV, and XLSX outputs are not supported.
+
+Supported outputs: Safari, cookies, CFURL cache, quarantine records, install history, XProtect behavior, Utmpx and terminal sessions, sudo last run, TCC privacy permissions, users, internet accounts, Dock items, recent items, Spotlight shortcuts, DHCP leases, FsEvents, Biome, and the ASL system log. Spotlight store files and SpotlightConfig are supported too. Each timestamp column in a row becomes its own timeline event.
+
+Single file: Use Import Timeline. The output is detected from its column headers (CSV) or its keys (JSONL).
+
+Folder: Import Folder (Recursive) imports every mac_apt file in the tree. A CSV and JSONL pair of the same output in one folder imports once, keeping the JSONL. Outputs with no timestamps (Network_Details, Network_Interfaces, and FileSharing) are listed as skipped with the reason "no timestamp columns".
+
+Spotlight store files: These are named Spotlight-<store>.csv and import from CSV only. Their timestamp columns vary by store, so each file's own columns decide which values become events. Expiration dates and ranking scores are never used as event times.
+
+FsEvents times are approximate: The FsEvents output records when the fseventsd log file was last modified, not when each file system event happened. The event type says so.
+
+Unparseable timestamps: A timestamp value that cannot be read produces no event, but the rest of its row still imports. After a single-file import, a notice reports how many values were skipped. If logging was on during the import, the notice says to see the log. Otherwise it says to turn on logging and import again. The log lists up to 10 examples per file, each with its row number, column name, and value. CSV rows count the header as row 1, so they match spreadsheet rows. JSONL examples give line numbers. In a folder import, the summary shows the skipped count after each tool and each family, and a collapsible table lists each file that had skipped values.`
   },
   {
     id: 'data-formats',
@@ -396,11 +418,13 @@ Dynamic CSV: Plaso's default output format with variable columns defined by the 
 
 macOS Unified Log: CSV and JSONL output from Mandiant's unifiedlog_iterator. Recognized by its column names (CSV) or by the boot_uuid, event_type, log_type, and process keys (JSONL). See the macOS Unified Log Import section.
 
+mac_apt: CSV and JSONL output from ydkhatri's mac_apt (v1.36.2 tested). The SQLite (.db), TSV, and XLSX outputs are not supported. CSV files are recognized by their exact column headers and JSONL files by their exact key sets, so a file with a changed or missing column is not detected. Spotlight store files (named Spotlight-<store>.csv) are recognized by their name and key columns. Each timestamp column in a row becomes one timeline event. The source is the plugin name (for example SAFARI or TCC), and the source type is "mac_apt" followed by the output name. FsEvents times are approximate: they are the modification time of the fseventsd log file, not the time of each event. See the mac_apt Import section for the outputs and details.
+
 MACB Notation: Timestamps are categorized using MACB notation where M = Modified, A = Accessed, C = Changed (metadata), B = Born (created). These map from the timestamp_desc field in Plaso output.
 
 EZ Tools CSV: Output from Eric Zimmerman's forensic tools. Each tool produces CSVs with tool-specific columns. Supported tools: EvtxECmd (Windows Event Logs), PECmd (Prefetch), LECmd (LNK files), JLECmd (Jump Lists, both Automatic and Custom), AmcacheParser (multiple sub-types: Unassociated Files, Device Containers, Device PnPs, Drive Binaries, Driver Packages, ShortCuts), SrumECmd (App Timeline, Energy Usage, Network Connections, Network Usages, Push Notifications, VFU Provider), MFTECmd (NTFS MFT), and SBECmd (ShellBags). Each timestamp column in the source CSV becomes a separate timeline event with appropriate MACB notation.
 
-Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with the .jsonl extension are checked as Unified Log JSONL first, then Plaso JSONL; .json files as Plaso JSONL; .tln and .l2ttln files as TLN. For .csv, .txt, and other files, the parser tries TLN first (pipe-delimited), then Unified Log CSV, then EZ Tools CSV (recognized by tool-specific column signatures), then L2T CSV (fixed 17 columns), then dynamic CSV (header-based).`
+Format Auto-Detection: When importing, 4n6time automatically detects the file format based on the file extension and content structure. Files with the .jsonl extension are checked as Unified Log JSONL first, then mac_apt JSONL, then Plaso JSONL; .json files as Plaso JSONL; .tln and .l2ttln files as TLN. For .csv files, the parser tries Unified Log CSV, then mac_apt CSV (recognized by exact column headers), then EZ Tools CSV (recognized by tool-specific column signatures), then L2T CSV (fixed 17 columns), then dynamic CSV (header-based).`
   }
 ]
 

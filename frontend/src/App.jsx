@@ -21,6 +21,7 @@ import HighlightText from './components/HighlightText'
 import TabBar from './components/TabBar'
 import SettingsDialog from './components/SettingsDialog'
 import RecursiveImportSummaryDialog from './components/RecursiveImportSummaryDialog'
+import ImportNoticeDialog from './components/ImportNoticeDialog'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
@@ -169,6 +170,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false)
   const [showRecursiveSummary, setShowRecursiveSummary] = useState(false)
   const [recursiveSummary, setRecursiveSummary] = useState(null)
+  const [importNotice, setImportNotice] = useState(null)
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
   const [showAddNote, setShowAddNote] = useState(false)
@@ -216,9 +218,9 @@ function App() {
   // JSON at close time, because the tab object's savedState is only written during tab switches.
   const liveTabStateRef = useRef({ page: 1, search: '', searchMode: 'simple', searchText: '', filters: null, bookmarkOnly: false })
 
-  // Pending session loaded from DB — shown in notification bar for manual restore.
+  // Pending session loaded from DB, shown in notification bar for manual restore.
   const [pendingSession, setPendingSession] = useState(null)
-  // True when the user clicked the window close button — shows the confirm dialog.
+  // True when the user clicked the window close button; shows the confirm dialog.
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   // Bumped by the [activeTabId] effect after each tab switch completes.
   // Passed to TimelineChart so its suppressed effect re-fires with the final state.
@@ -534,6 +536,14 @@ function App() {
         setShowFilters(false)
         setSelectedEvent(null)
         setStatus(`Imported: ${info.eventCount.toLocaleString()} events`)
+        if (info.importUnparseable > 0) {
+          setImportNotice({
+            file: path.split(/[\\/]/).pop(),
+            imported: info.importedEvents,
+            unparseable: info.importUnparseable,
+            logEnabled: info.importLogEnabled,
+          })
+        }
         await loadPage(1, info, null)
         // Only offer session restore if no non-main tabs are currently open.
         const currentNonMain = tabsRef.current.filter(t => !t.isMain)
@@ -1202,7 +1212,7 @@ function App() {
     }
   }, [handleOpenDB, handleImportCSV, handleImportFolderRecursive, handleCloseDB, handleExportCSV])
 
-  // Handle window close button and File > Quit — show React confirmation dialog.
+  // Handle window close button and File > Quit: show React confirmation dialog.
   // Registered once with empty deps; actual save+quit handled in the dialog's confirm handler.
   // menu:quit skips the dialog when no database is open.
   useEffect(() => {
@@ -1520,6 +1530,11 @@ function App() {
         visible={showRecursiveSummary}
         summary={recursiveSummary}
         onClose={() => setShowRecursiveSummary(false)}
+      />
+
+      <ImportNoticeDialog
+        notice={importNotice}
+        onClose={() => setImportNotice(null)}
       />
 
       <PostgresDialog

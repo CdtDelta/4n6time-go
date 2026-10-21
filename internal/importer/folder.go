@@ -17,10 +17,19 @@ const (
 	SkipReasonParseError         = "parse error: "
 )
 
-// ToolStats holds per-tool import metrics.
+// ToolStats holds per-tool import metrics. UnparseableCount is the number of
+// non-empty timestamp values the tool's files held that could not be parsed.
 type ToolStats struct {
-	FileCount  int `json:"fileCount"`
-	EventCount int `json:"eventCount"`
+	FileCount        int `json:"fileCount"`
+	EventCount       int `json:"eventCount"`
+	UnparseableCount int `json:"unparseableCount"`
+}
+
+// UnparseableFile records how many unparseable timestamp values an imported
+// file had. Only files with a non-zero count appear in the summary.
+type UnparseableFile struct {
+	RelativePath string `json:"relativePath"`
+	Count        int    `json:"count"`
 }
 
 // SkippedFile records a file that was not imported and the reason why.
@@ -33,6 +42,7 @@ type SkippedFile struct {
 type ImportSummary struct {
 	PerTool             map[string]ToolStats `json:"perTool"`
 	SkippedFiles        []SkippedFile        `json:"skippedFiles"`
+	UnparseableFiles    []UnparseableFile    `json:"unparseableFiles"`
 	TotalEvents         int                  `json:"totalEvents"`
 	TotalFilesProcessed int                  `json:"totalFilesProcessed"`
 	DirectoriesWalked   int                  `json:"directoriesWalked"`
@@ -82,7 +92,8 @@ func recursiveExtensions(formats []*Format) map[string]struct{} {
 // detects and imports all files recognized by a Recursive registry entry, and
 // returns a summary. Symlinks are skipped without error. Files whose extension
 // no recursive entry claims are silently ignored. Duplicate UnifiedLog exports
-// of the same data are imported once; see markUnifiedLogDuplicates.
+// of the same data are imported once; see markUnifiedLogDuplicates and
+// markMacAptDuplicates.
 // Each imported file gets its own l2t_imports row, named by its path relative
 // to root (forward slashes) and labeled with label. Skipped files get no row.
 // onProgress is called after each successfully imported file with the relative
@@ -101,6 +112,7 @@ func ImportFolderRecursive(root string, store database.Store, label string, logf
 		return nil, err
 	}
 	markUnifiedLogDuplicates(entries)
+	markMacAptDuplicates(entries)
 
 	skip := func(rel, reason string) {
 		summary.SkippedFiles = append(summary.SkippedFiles, SkippedFile{
@@ -115,12 +127,13 @@ func ImportFolderRecursive(root string, store database.Store, label string, logf
 			continue
 		}
 
+		var prog Progress
 		res := runTracked(store, trackedSpec{
 			Filename: filepath.ToSlash(e.rel),
 			Label:    label,
 			Format:   e.label,
 		}, logf, func(s database.Store) (int, error) {
-			return e.format.Import(e.path, s, nil)
+			return e.format.Import(e.path, s, &prog)
 		})
 		if res.ID == 0 {
 			// Nothing was imported, so the file is skipped rather than
@@ -139,7 +152,15 @@ func ImportFolderRecursive(root string, store database.Store, label string, logf
 		stats := summary.PerTool[e.label]
 		stats.FileCount++
 		stats.EventCount += inserted
+		stats.UnparseableCount += prog.Unparseable
 		summary.PerTool[e.label] = stats
+		if prog.Unparseable > 0 {
+			summary.UnparseableFiles = append(summary.UnparseableFiles, UnparseableFile{
+				RelativePath: e.rel,
+				Count:        prog.Unparseable,
+			})
+			logUnparseableExamples(logf, filepath.ToSlash(e.rel), &prog)
+		}
 		if e.format.Family != "" {
 			summary.ToolFamilies[e.label] = e.format.Family
 		}

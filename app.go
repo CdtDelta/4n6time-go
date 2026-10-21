@@ -343,7 +343,18 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 	})
 	a.logInfo(fmt.Sprintf("Import complete: %d %s events in %s", total, formatName, time.Since(importStart).Round(time.Millisecond)))
 
-	return a.getDBInfo()
+	info, err := a.getDBInfo()
+	if err != nil {
+		return nil, err
+	}
+	if info != nil {
+		info.ImportedEvents = total
+		info.ImportUnparseable = res.Unparseable
+		a.logMu.Lock()
+		info.ImportLogEnabled = a.logEnabled
+		a.logMu.Unlock()
+	}
+	return info, nil
 }
 
 // ImportFolderRecursive walks dirPath, the folder chosen in SelectImportFolder,
@@ -1907,6 +1918,14 @@ type DBInfo struct {
 	EventCount int64  `json:"eventCount"`
 	MinDate    string `json:"minDate"`
 	MaxDate    string `json:"maxDate"`
+	// ImportedEvents and ImportUnparseable describe the single-file import
+	// that just ran. ImportCSV sets them; every other caller leaves them zero.
+	// They are not omitted when zero, so the frontend always sees a number.
+	ImportedEvents    int `json:"importedEvents"`
+	ImportUnparseable int `json:"importUnparseable"`
+	// ImportLogEnabled reports whether logging was on when the import ran, so
+	// the notice can say whether the log holds the skipped values.
+	ImportLogEnabled bool `json:"importLogEnabled"`
 }
 
 func (a *App) loadDatabase(path string) (*DBInfo, error) {
