@@ -19,8 +19,8 @@ func pgQuoteCol(name string) string {
 // GetTimelineHistogram to their PostgreSQL to_char equivalents.
 var strftimeToPostgres = map[string]string{
 	"%Y-%m-%d %H:00:00": "YYYY-MM-DD HH24:00:00",
-	"%Y-%m-%d":           "YYYY-MM-DD",
-	"%Y-%m":              "YYYY-MM",
+	"%Y-%m-%d":          "YYYY-MM-DD",
+	"%Y-%m":             "YYYY-MM",
 }
 
 // PostgresDialect implements the Dialect interface for PostgreSQL databases.
@@ -28,10 +28,10 @@ var strftimeToPostgres = map[string]string{
 type PostgresDialect struct{}
 
 func (d *PostgresDialect) DriverName() string              { return "pgx" }
-func (d *PostgresDialect) DSN(pathOrConnStr string) string  { return pathOrConnStr }
-func (d *PostgresDialect) Placeholder(index int) string     { return fmt.Sprintf("$%d", index) }
-func (d *PostgresDialect) IDColumn() string                 { return "id" }
-func (d *PostgresDialect) QuoteColumn(name string) string   { return pgQuoteCol(name) }
+func (d *PostgresDialect) DSN(pathOrConnStr string) string { return pathOrConnStr }
+func (d *PostgresDialect) Placeholder(index int) string    { return fmt.Sprintf("$%d", index) }
+func (d *PostgresDialect) IDColumn() string                { return "id" }
+func (d *PostgresDialect) QuoteColumn(name string) string  { return pgQuoteCol(name) }
 
 func (d *PostgresDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 	return fmt.Sprintf("(datetime BETWEEN %s AND %s)",

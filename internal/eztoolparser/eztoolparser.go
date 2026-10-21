@@ -33,16 +33,16 @@ const (
 	ToolSrumECmdNetworkUsages        = "SrumECmd NetworkUsages"
 	ToolSrumECmdPushNotifications    = "SrumECmd PushNotifications"
 	ToolSrumECmdVfuprov              = "SrumECmd vfuprov"
-	ToolMFTECmdMFT                    = "MFTECmd $MFT"
-	ToolMFTECmdJ                      = "MFTECmd $J"
-	ToolMFTECmdBoot                   = "MFTECmd $Boot"
-	ToolMFTECmdSDS                    = "MFTECmd $SDS"
-	ToolSBECmd                        = "SBECmd"
-	ToolRBCmd                         = "RBCmd"
-	ToolAppCompatCacheParser          = "AppCompatCacheParser"
-	ToolSrumECmdAppResourceUseInfo    = "SrumECmd AppResourceUseInfo"
-	ToolWxTCmdActivity                = "WxTCmd Activity"
-	ToolWxTCmdPackageIDs              = "WxTCmd PackageIDs"
+	ToolMFTECmdMFT                   = "MFTECmd $MFT"
+	ToolMFTECmdJ                     = "MFTECmd $J"
+	ToolMFTECmdBoot                  = "MFTECmd $Boot"
+	ToolMFTECmdSDS                   = "MFTECmd $SDS"
+	ToolSBECmd                       = "SBECmd"
+	ToolRBCmd                        = "RBCmd"
+	ToolAppCompatCacheParser         = "AppCompatCacheParser"
+	ToolSrumECmdAppResourceUseInfo   = "SrumECmd AppResourceUseInfo"
+	ToolWxTCmdActivity               = "WxTCmd Activity"
+	ToolWxTCmdPackageIDs             = "WxTCmd PackageIDs"
 )
 
 // NoTimestampFormats contains tool names for recognized formats that have no
@@ -50,8 +50,8 @@ const (
 // these formats are skipped with an explanatory message rather than treated
 // as unknown.
 var NoTimestampFormats = map[string]struct{}{
-	ToolMFTECmdBoot:   {},
-	ToolMFTECmdSDS:    {},
+	ToolMFTECmdBoot:      {},
+	ToolMFTECmdSDS:       {},
 	ToolWxTCmdPackageIDs: {},
 }
 

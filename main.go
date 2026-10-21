@@ -87,9 +87,9 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:       app.startup,
-		OnShutdown:      app.shutdown,
-		OnBeforeClose:   app.OnBeforeClose,
+		OnStartup:     app.startup,
+		OnShutdown:    app.shutdown,
+		OnBeforeClose: app.OnBeforeClose,
 		Bind: []interface{}{
 			app,
 		},

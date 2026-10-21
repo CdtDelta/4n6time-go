@@ -26,8 +26,8 @@ type QueryDialect interface {
 // sqliteQueryDialect is the default dialect, producing SQLite-compatible SQL.
 type sqliteQueryDialect struct{}
 
-func (d sqliteQueryDialect) Placeholder(index int) string { return "?" }
-func (d sqliteQueryDialect) IDColumn() string             { return "rowid" }
+func (d sqliteQueryDialect) Placeholder(index int) string   { return "?" }
+func (d sqliteQueryDialect) IDColumn() string               { return "rowid" }
 func (d sqliteQueryDialect) QuoteColumn(name string) string { return name }
 
 func (d sqliteQueryDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {

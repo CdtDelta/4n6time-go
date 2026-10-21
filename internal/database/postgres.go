@@ -1039,15 +1039,15 @@ func pgScanEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
 		var (
-			id                                                      int64
-			timezone, macb, source, sourcetype, typ                 sql.NullString
-			user, host, desc, filename, inode                       sql.NullString
-			notes, format, extra, datetime, reportnotes             sql.NullString
-			inreport, tag, color                                    sql.NullString
-			offset, storeNumber, storeIndex, vssStoreNumber         sql.NullInt64
-			url, recordNumber, eventID, eventType                   sql.NullString
-			sourceName, userSID, computerName                       sql.NullString
-			bookmark, importID                                      sql.NullInt64
+			id                                              int64
+			timezone, macb, source, sourcetype, typ         sql.NullString
+			user, host, desc, filename, inode               sql.NullString
+			notes, format, extra, datetime, reportnotes     sql.NullString
+			inreport, tag, color                            sql.NullString
+			offset, storeNumber, storeIndex, vssStoreNumber sql.NullInt64
+			url, recordNumber, eventID, eventType           sql.NullString
+			sourceName, userSID, computerName               sql.NullString
+			bookmark, importID                              sql.NullInt64
 		)
 
 		err := rows.Scan(
@@ -1117,15 +1117,15 @@ func pgScanFieldsOrderEvents(rows *sql.Rows) ([]*model.Event, error) {
 	var events []*model.Event
 	for rows.Next() {
 		var (
-			id                                                      int64
-			datetime, timezone, macb, source, sourcetype, typ       sql.NullString
-			user, host, desc, filename                              sql.NullString
-			inode, notes, format, extra, reportnotes                sql.NullString
-			inreport, tag, color                                    sql.NullString
-			offset, storeNumber, storeIndex, vssStoreNumber         sql.NullInt64
-			url, recordNumber, eventID, eventType                   sql.NullString
-			sourceName, userSID, computerName                       sql.NullString
-			bookmark, importID                                      sql.NullInt64
+			id                                                int64
+			datetime, timezone, macb, source, sourcetype, typ sql.NullString
+			user, host, desc, filename                        sql.NullString
+			inode, notes, format, extra, reportnotes          sql.NullString
+			inreport, tag, color                              sql.NullString
+			offset, storeNumber, storeIndex, vssStoreNumber   sql.NullInt64
+			url, recordNumber, eventID, eventType             sql.NullString
+			sourceName, userSID, computerName                 sql.NullString
+			bookmark, importID                                sql.NullInt64
 		)
 
 		err := rows.Scan(

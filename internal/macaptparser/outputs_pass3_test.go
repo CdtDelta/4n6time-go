@@ -208,11 +208,13 @@ var spotlightAColumns = []string{
 var spotlightAName = "Spotlight-CoreSpotlight_cdtdelta-store.csv"
 
 // spotlightARows. Expected events, by column:
-//   row 1: Date_Updated                  (1 event)
-//   row 1: kMDItemContentCreationDate    (1 event)
-//   row 1: kMDItemDateAdded              (1 event)
-//   row 1: kMDItemDueDates, two values   (2 events)
-//   row 2: kMDItemDateAdded              (1 event)
+//
+//	row 1: Date_Updated                  (1 event)
+//	row 1: kMDItemContentCreationDate    (1 event)
+//	row 1: kMDItemDateAdded              (1 event)
+//	row 1: kMDItemDueDates, two values   (2 events)
+//	row 2: kMDItemDateAdded              (1 event)
+//
 // Row 1 leaves kMDItemLastUsedDate and kMDItemContentModificationDate empty.
 // _kMDItemExpirationDate, kMDItemStartDateHour, and kMDItemFSName_Ranking
 // produce nothing.

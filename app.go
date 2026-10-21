@@ -487,15 +487,15 @@ func basePredicate(req QueryRequest) (*query.Predicate, error) {
 
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
-	Filters      []FilterItem `json:"filters"`
-	Logic        string       `json:"logic"`
-	OrderBy      string       `json:"orderBy"`
-	Page         int          `json:"page"`
-	PageSize     int          `json:"pageSize"`
-	SearchText   string       `json:"searchText"`
+	Filters    []FilterItem `json:"filters"`
+	Logic      string       `json:"logic"`
+	OrderBy    string       `json:"orderBy"`
+	Page       int          `json:"page"`
+	PageSize   int          `json:"pageSize"`
+	SearchText string       `json:"searchText"`
 	// SearchMode is "simple" (default keyword LIKE) or "advanced" (raw SQL WHERE fragment).
-	SearchMode   string       `json:"searchMode"`
-	BookmarkOnly bool         `json:"bookmarkOnly"`
+	SearchMode   string `json:"searchMode"`
+	BookmarkOnly bool   `json:"bookmarkOnly"`
 	// BaseField/BaseOp/BaseValue: optional tab base query ANDed with all filters.
 	BaseField string `json:"baseField"`
 	BaseOp    string `json:"baseOp"`

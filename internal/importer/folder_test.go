@@ -44,36 +44,36 @@ func (m *mockStore) ExecuteQuery(_ string, _ []interface{}, _ *database.NotesFil
 func (m *mockStore) ExecuteCountQuery(_ string, _ []interface{}, _ *database.NotesFilter) (int64, error) {
 	return 0, nil
 }
-func (m *mockStore) GetDistinctValues(_ string) (map[string]int64, error)       { return nil, nil }
+func (m *mockStore) GetDistinctValues(_ string) (map[string]int64, error) { return nil, nil }
 func (m *mockStore) GetDistinctValuesFiltered(_ string, _ string, _ []interface{}) (map[string]int64, error) {
 	return nil, nil
 }
-func (m *mockStore) GetDistinctTags() ([]string, error)         { return nil, nil }
-func (m *mockStore) GetMinMaxDate() (string, string, error)     { return "", "", nil }
+func (m *mockStore) GetDistinctTags() ([]string, error)     { return nil, nil }
+func (m *mockStore) GetMinMaxDate() (string, string, error) { return "", "", nil }
 func (m *mockStore) GetMinMaxDateFiltered(_ string, _ []interface{}) (string, string, error) {
 	return "", "", nil
 }
 func (m *mockStore) GetTimelineHistogram(_ string, _ []interface{}) ([]database.TimelineBucket, error) {
 	return nil, nil
 }
-func (m *mockStore) GetSavedQueries() ([]database.SavedQuery, error)          { return nil, nil }
-func (m *mockStore) SaveQuery(_ string, _ string) error                        { return nil }
-func (m *mockStore) DeleteQuery(_ string) error                                { return nil }
-func (m *mockStore) InsertExaminerNote(_, _, _, _ string) (int64, error)       { return 0, nil }
-func (m *mockStore) DeleteExaminerNote(_ int64) error                          { return nil }
-func (m *mockStore) UpdateExaminerNoteColor(_ int64, _ string) error           { return nil }
-func (m *mockStore) ToggleExaminerNoteBookmark(_ int64) (int64, error)         { return 0, nil }
-func (m *mockStore) GetExaminerNotes() ([]*model.Event, error)                 { return nil, nil }
-func (m *mockStore) BulkUpdateColor(_ []int64, _ string) error                 { return nil }
-func (m *mockStore) BulkAddTag(_ []int64, _ string) error                      { return nil }
-func (m *mockStore) BulkSetBookmark(_ []int64, _ int64) error                  { return nil }
-func (m *mockStore) BulkUpdateExaminerNoteColor(_ []int64, _ string) error     { return nil }
-func (m *mockStore) BulkSetExaminerNoteBookmark(_ []int64, _ int64) error      { return nil }
-func (m *mockStore) SaveTabSession(_ string) error                             { return nil }
-func (m *mockStore) LoadTabSession() (string, error)                           { return "", nil }
-func (m *mockStore) UpdateMetadata() error                                     { return nil }
-func (m *mockStore) RebuildIndexes(_ []string) error                           { return nil }
-func (m *mockStore) Migrate() error                                            { return nil }
+func (m *mockStore) GetSavedQueries() ([]database.SavedQuery, error)       { return nil, nil }
+func (m *mockStore) SaveQuery(_ string, _ string) error                    { return nil }
+func (m *mockStore) DeleteQuery(_ string) error                            { return nil }
+func (m *mockStore) InsertExaminerNote(_, _, _, _ string) (int64, error)   { return 0, nil }
+func (m *mockStore) DeleteExaminerNote(_ int64) error                      { return nil }
+func (m *mockStore) UpdateExaminerNoteColor(_ int64, _ string) error       { return nil }
+func (m *mockStore) ToggleExaminerNoteBookmark(_ int64) (int64, error)     { return 0, nil }
+func (m *mockStore) GetExaminerNotes() ([]*model.Event, error)             { return nil, nil }
+func (m *mockStore) BulkUpdateColor(_ []int64, _ string) error             { return nil }
+func (m *mockStore) BulkAddTag(_ []int64, _ string) error                  { return nil }
+func (m *mockStore) BulkSetBookmark(_ []int64, _ int64) error              { return nil }
+func (m *mockStore) BulkUpdateExaminerNoteColor(_ []int64, _ string) error { return nil }
+func (m *mockStore) BulkSetExaminerNoteBookmark(_ []int64, _ int64) error  { return nil }
+func (m *mockStore) SaveTabSession(_ string) error                         { return nil }
+func (m *mockStore) LoadTabSession() (string, error)                       { return "", nil }
+func (m *mockStore) UpdateMetadata() error                                 { return nil }
+func (m *mockStore) RebuildIndexes(_ []string) error                       { return nil }
+func (m *mockStore) Migrate() error                                        { return nil }
 func (m *mockStore) CreateImport(rec model.ImportRecord) (int64, error) {
 	rec.ID = int64(len(m.imports) + 1)
 	rec.Status = "in_progress"
@@ -102,8 +102,8 @@ func (m *mockStore) GetImport(id int64) (*model.ImportRecord, error) {
 	}
 	return nil, nil
 }
-func (m *mockStore) Close() error                                              { return nil }
-func (m *mockStore) Path() string                                              { return ":mock:" }
+func (m *mockStore) Close() error { return nil }
+func (m *mockStore) Path() string { return ":mock:" }
 
 // writeTmpCSV writes content to a named file inside dir and returns the path.
 func writeTmpCSV(t *testing.T, dir, name, content string) string {

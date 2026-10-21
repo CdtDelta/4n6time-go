@@ -6,11 +6,11 @@ import "fmt"
 // It also satisfies query.QueryDialect through structural typing.
 type SQLiteDialect struct{}
 
-func (d *SQLiteDialect) DriverName() string                { return "sqlite" }
-func (d *SQLiteDialect) DSN(pathOrConnStr string) string    { return pathOrConnStr }
-func (d *SQLiteDialect) Placeholder(index int) string       { return "?" }
-func (d *SQLiteDialect) IDColumn() string                   { return "rowid" }
-func (d *SQLiteDialect) QuoteColumn(name string) string     { return name }
+func (d *SQLiteDialect) DriverName() string              { return "sqlite" }
+func (d *SQLiteDialect) DSN(pathOrConnStr string) string { return pathOrConnStr }
+func (d *SQLiteDialect) Placeholder(index int) string    { return "?" }
+func (d *SQLiteDialect) IDColumn() string                { return "rowid" }
+func (d *SQLiteDialect) QuoteColumn(name string) string  { return name }
 
 func (d *SQLiteDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 	return "(datetime BETWEEN datetime(?) AND datetime(?))"
