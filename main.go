@@ -29,6 +29,9 @@ func main() {
 	fileMenu.AddText("Import Folder (Recursive)...", nil, func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:import-folder-recursive")
 	})
+	fileMenu.AddText("Imports...", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:imports")
+	})
 	fileMenu.AddSeparator()
 	fileMenu.AddText("Close Database", keys.CmdOrCtrl("w"), func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:close-database")

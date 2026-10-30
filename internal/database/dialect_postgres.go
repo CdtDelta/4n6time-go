@@ -150,10 +150,15 @@ func (d *PostgresDialect) CreateImportsTableSQL() string {
 		format TEXT,
 		imported_at TIMESTAMP,
 		event_count INT DEFAULT 0,
-		status TEXT
+		status TEXT,
+		error_message TEXT
 	)`
 }
 
 func (d *PostgresDialect) InsertImportSQL() string {
 	return `INSERT INTO l2t_imports (filename, label, format, imported_at, event_count, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`
+}
+
+func (d *PostgresDialect) AddImportErrorColumnSQL() string {
+	return `ALTER TABLE l2t_imports ADD COLUMN IF NOT EXISTS error_message TEXT`
 }

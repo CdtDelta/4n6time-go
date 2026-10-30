@@ -101,12 +101,16 @@ func runTracked(store database.Store, spec trackedSpec, logf Logger, run func(da
 	count, runErr := run(&stampingStore{Store: store, importID: id})
 	res.Count = count
 	status := model.ImportStatusComplete
+	errText := ""
 	if runErr != nil {
 		res.ImportErr = runErr
 		status = model.ImportStatusFailed
+		errText = runErr.Error()
+		logAt(logf, "ERROR", fmt.Sprintf("Import %d failed: file=%s format=%s: %s",
+			id, rec.Filename, rec.Format, errText))
 	}
 
-	if err := store.FinalizeImport(id, count, status); err != nil {
+	if err := store.FinalizeImport(id, count, status, errText); err != nil {
 		res.RecordErr = fmt.Errorf("finalizing import %d: %w", id, err)
 		logAt(logf, "ERROR", res.RecordErr.Error())
 		return res

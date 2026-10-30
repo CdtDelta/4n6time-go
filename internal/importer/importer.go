@@ -282,7 +282,19 @@ func exclusiveClaimants(ext string) []*Format {
 	return out
 }
 
-// insertEvents hands parsed events to the store and reports progress.
+// InsertError marks an import that parsed its file but failed in
+// InsertEvents, so recursive import can tell an insert failure from a parse
+// failure. Its text is "inserting events: " plus the store's error, as before.
+type InsertError struct {
+	Err error
+}
+
+func (e *InsertError) Error() string { return "inserting events: " + e.Err.Error() }
+
+func (e *InsertError) Unwrap() error { return e.Err }
+
+// insertEvents hands parsed events to the store and reports progress. A store
+// failure comes back as an *InsertError.
 func insertEvents(store database.Store, events []*model.Event, p *Progress) (int, error) {
 	total := len(events)
 	p.insertStart(total)
@@ -291,7 +303,7 @@ func insertEvents(store database.Store, events []*model.Event, p *Progress) (int
 	}
 	inserted, err := store.InsertEvents(events, p.inserting(total))
 	if err != nil {
-		return 0, fmt.Errorf("inserting events: %w", err)
+		return 0, &InsertError{Err: err}
 	}
 	return inserted, nil
 }

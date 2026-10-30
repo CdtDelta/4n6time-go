@@ -39,14 +39,14 @@ func newImportFilterFixture(t *testing.T) importFilterFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.FinalizeImport(idA, 3, model.ImportStatusComplete); err != nil {
+	if err := store.FinalizeImport(idA, 3, model.ImportStatusComplete, ""); err != nil {
 		t.Fatal(err)
 	}
 	idB, err := store.CreateImport(model.ImportRecord{Filename: "b.csv", Format: "LECmd"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.FinalizeImport(idB, 3, model.ImportStatusComplete); err != nil {
+	if err := store.FinalizeImport(idB, 3, model.ImportStatusComplete, ""); err != nil {
 		t.Fatal(err)
 	}
 

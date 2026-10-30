@@ -10,8 +10,15 @@ import (
 
 // copyImportRecords copies every import record from src to dst and returns the
 // map from source ID to destination ID. Filename, label, format, imported_at,
-// event count, and status carry over. FinalizeImport accepts only final
-// statuses, so an in_progress record stays in_progress on the destination.
+// event count, status, and a failed import's error_message carry over.
+// FinalizeImport accepts only final statuses, so an in_progress record stays
+// in_progress on the destination. A destination l2t_imports table without
+// error_message gets the column from migrateImportProvenance when
+// CreateStore opens it, before this copy runs.
+//
+// The push is not one transaction: records, events (one transaction), notes,
+// and metadata are separate steps, so a failure part way leaves the earlier
+// steps in the destination.
 func copyImportRecords(src, dst database.Store, logf importer.Logger) (map[int64]int64, error) {
 	records, err := src.GetImports()
 	if err != nil {
@@ -33,7 +40,7 @@ func copyImportRecords(src, dst database.Store, logf importer.Logger) (map[int64
 
 		switch rec.Status {
 		case model.ImportStatusComplete, model.ImportStatusFailed:
-			if err := dst.FinalizeImport(newID, int(rec.EventCount), rec.Status); err != nil {
+			if err := dst.FinalizeImport(newID, int(rec.EventCount), rec.Status, rec.ErrorMessage); err != nil {
 				return nil, fmt.Errorf("finalizing import record for %s: %w", rec.Filename, err)
 			}
 		case model.ImportStatusInProgress:

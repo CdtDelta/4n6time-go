@@ -53,14 +53,14 @@ func TestCopyImportRecordsPreservesFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := src.FinalizeImport(complete, 42, model.ImportStatusComplete); err != nil {
+	if err := src.FinalizeImport(complete, 42, model.ImportStatusComplete, ""); err != nil {
 		t.Fatal(err)
 	}
 	failed, err := src.CreateImport(model.ImportRecord{Filename: "bad.csv", Format: "EZ Tools CSV"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := src.FinalizeImport(failed, 0, model.ImportStatusFailed); err != nil {
+	if err := src.FinalizeImport(failed, 0, model.ImportStatusFailed, ""); err != nil {
 		t.Fatal(err)
 	}
 	pending, err := src.CreateImport(model.ImportRecord{Filename: "stuck.csv"})
@@ -126,7 +126,7 @@ func TestCopyImportRecordsThenRemapEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := src.FinalizeImport(srcID, 1, model.ImportStatusComplete); err != nil {
+	if err := src.FinalizeImport(srcID, 1, model.ImportStatusComplete, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Burn an ID on the destination so the mapping is not the identity.

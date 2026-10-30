@@ -94,6 +94,10 @@ export function GetImports() {
   return window['go']['main']['App']['GetImports']();
 }
 
+export function GetLastImportFailure() {
+  return window['go']['main']['App']['GetLastImportFailure']();
+}
+
 export function GetLoggingStatus() {
   return window['go']['main']['App']['GetLoggingStatus']();
 }
@@ -104,6 +108,10 @@ export function GetMinMaxDate() {
 
 export function GetPostgresHost() {
   return window['go']['main']['App']['GetPostgresHost']();
+}
+
+export function GetReadOnlyOpenFailure() {
+  return window['go']['main']['App']['GetReadOnlyOpenFailure']();
 }
 
 export function GetSavedQueries() {

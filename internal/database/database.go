@@ -45,9 +45,14 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	// Retry up to 5 seconds on SQLITE_BUSY instead of failing immediately.
 	db.conn.Exec("PRAGMA busy_timeout = 5000")
 
-	// Migrate: add bookmark column if it doesn't exist (for pre-0.8.0 databases)
+	// Migrate older schemas (bookmark, examiner_notes, tab sessions, import
+	// provenance, error_message). On read-only storage a needed migration
+	// cannot write; that case wraps ErrReadOnlyUpgrade so the app can explain it.
 	if err := db.migrate(); err != nil {
 		conn.Close()
+		if isReadOnlyMigrationError(err, path) {
+			return nil, fmt.Errorf("migrating database: %w: %w", ErrReadOnlyUpgrade, err)
+		}
 		return nil, fmt.Errorf("migrating database: %w", err)
 	}
 

@@ -216,7 +216,7 @@ func TestImportRecordRoundTrip(t *testing.T) {
 		t.Errorf("empty ImportedAt not filled with layout %s: %q (%v)", importedAtLayout, rec.ImportedAt, err)
 	}
 
-	if err := db.FinalizeImport(id1, 42, model.ImportStatusComplete); err != nil {
+	if err := db.FinalizeImport(id1, 42, model.ImportStatusComplete, ""); err != nil {
 		t.Fatalf("FinalizeImport failed: %v", err)
 	}
 	rec, err = db.GetImport(id1)
@@ -237,7 +237,7 @@ func TestImportRecordRoundTrip(t *testing.T) {
 	if pending, err := db.GetImport(id2); err != nil || pending == nil || pending.Status != model.ImportStatusInProgress {
 		t.Fatalf("CreateImport(Status: complete) stored %+v (err %v), want in_progress", pending, err)
 	}
-	if err := db.FinalizeImport(id2, 0, model.ImportStatusFailed); err != nil {
+	if err := db.FinalizeImport(id2, 0, model.ImportStatusFailed, ""); err != nil {
 		t.Fatalf("FinalizeImport failed: %v", err)
 	}
 
@@ -264,7 +264,7 @@ func TestImportMissingAndInvalid(t *testing.T) {
 		t.Errorf("GetImport(missing) = %v, %v; want nil, nil", rec, err)
 	}
 
-	if err := db.FinalizeImport(9999, 1, model.ImportStatusComplete); err == nil {
+	if err := db.FinalizeImport(9999, 1, model.ImportStatusComplete, ""); err == nil {
 		t.Error("FinalizeImport on missing id returned nil error")
 	}
 
@@ -272,13 +272,13 @@ func TestImportMissingAndInvalid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateImport failed: %v", err)
 	}
-	if err := db.FinalizeImport(id, 1, model.ImportStatusInProgress); err == nil {
+	if err := db.FinalizeImport(id, 1, model.ImportStatusInProgress, ""); err == nil {
 		t.Error("FinalizeImport accepted in_progress as a final status")
 	}
-	if err := db.FinalizeImport(id, 1, "bogus"); err == nil {
+	if err := db.FinalizeImport(id, 1, "bogus", ""); err == nil {
 		t.Error("FinalizeImport accepted an unknown status")
 	}
-	if err := db.FinalizeImport(id, -1, model.ImportStatusComplete); err == nil {
+	if err := db.FinalizeImport(id, -1, model.ImportStatusComplete, ""); err == nil {
 		t.Error("FinalizeImport accepted a negative event count")
 	}
 	if _, err := db.CreateImport(model.ImportRecord{Filename: "x.csv", ImportedAt: "yesterday"}); err == nil {

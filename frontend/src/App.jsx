@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit, NeedsOffsetUpgrade, UpgradeOffsetColumn, CheckPushTargetOffset, UpgradePushTargetOffset } from '../wailsjs/go/main/App'
+import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit, NeedsOffsetUpgrade, UpgradeOffsetColumn, CheckPushTargetOffset, UpgradePushTargetOffset, GetLastImportFailure, GetReadOnlyOpenFailure } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import ImportLabelDialog from './components/ImportLabelDialog'
 import PostgresDialog from './components/PostgresDialog'
@@ -22,6 +22,9 @@ import TabBar from './components/TabBar'
 import SettingsDialog from './components/SettingsDialog'
 import RecursiveImportSummaryDialog from './components/RecursiveImportSummaryDialog'
 import ImportNoticeDialog from './components/ImportNoticeDialog'
+import ImportFailureDialog from './components/ImportFailureDialog'
+import ImportsDialog from './components/ImportsDialog'
+import ReadOnlyDatabaseDialog from './components/ReadOnlyDatabaseDialog'
 import OffsetUpgradeDialog from './components/OffsetUpgradeDialog'
 import themes, { lightThemes } from './themes'
 
@@ -172,6 +175,12 @@ function App() {
   const [showRecursiveSummary, setShowRecursiveSummary] = useState(false)
   const [recursiveSummary, setRecursiveSummary] = useState(null)
   const [importNotice, setImportNotice] = useState(null)
+  // importFailure is the main.ImportFailure of a failed single-file import.
+  const [importFailure, setImportFailure] = useState(null)
+  const [showImports, setShowImports] = useState(false)
+  // readOnlyOpen is the main.ReadOnlyOpenFailure of a database that needs an
+  // upgrade but is on read-only storage.
+  const [readOnlyOpen, setReadOnlyOpen] = useState(null)
   // Pending offset column upgrade prompt: { context, run, proceed?, cancelled? }.
   // Not persisted: "Later" lasts for this connection only.
   const [offsetPrompt, setOffsetPrompt] = useState(null)
@@ -467,6 +476,47 @@ function App() {
     setPendingSession(null)
   }, [])
 
+  // Put the UI into its no-database state without touching the backend. Used
+  // when an open fails after the backend already closed the previous database
+  // (loadDatabase closes it before opening the new file).
+  const resetToNoDatabase = useCallback(() => {
+    dbInfoRef.current = null
+    setDbInfo(null)
+    setEvents([])
+    setTotalCount(0)
+    setCurrentPage(1)
+    setActiveFilters(null)
+    setShowFilters(false)
+    setSelectedEvent(null)
+    setPendingSession(null)
+    setTabs([makeTab(MAIN_TAB_ID, 'All Events')])
+    setActiveTabId(MAIN_TAB_ID)
+    activeBaseQueryRef.current = null
+  }, [])
+
+  // Shared failure handling for every database open path. A database that
+  // needs an upgrade but is on read-only storage gets ReadOnlyDatabaseDialog
+  // instead of the raw error. A failure reading that state is logged and
+  // shown, not swallowed.
+  const handleOpenFailure = useCallback(async (err) => {
+    setStatus('Error: ' + err)
+    let readOnly = null
+    try {
+      readOnly = await GetReadOnlyOpenFailure()
+    } catch (bindErr) {
+      console.error('GetReadOnlyOpenFailure failed:', bindErr)
+      setStatus(`Error: ${err} (could not check for a read-only database: ${bindErr})`)
+      return
+    }
+    if (readOnly) {
+      resetToNoDatabase()
+      setStatus('Database not opened: read-only storage, upgrade needed')
+      setReadOnlyOpen(readOnly)
+    }
+  }, [resetToNoDatabase])
+
+  // Every open path (welcome screen button, toolbar Open, File > Open
+  // Database) calls this.
   const handleOpenDB = useCallback(async () => {
     try {
       setStatus('Opening database...')
@@ -493,9 +543,9 @@ function App() {
         setStatus('')
       }
     } catch (err) {
-      setStatus('Error: ' + err)
+      await handleOpenFailure(err)
     }
-  }, [loadPage, handleRestoreTabSession])
+  }, [loadPage, handleRestoreTabSession, handleOpenFailure])
 
   const handlePostgresConnect = useCallback(async (info) => {
     setShowPostgres(false)
@@ -604,6 +654,31 @@ function App() {
       }
     } catch (err) {
       setStatus('Error: ' + err)
+      // The status bar is overwritten by the next grid load, so the failure
+      // also gets a dialog that stays until dismissed.
+      let failure = null
+      try { failure = await GetLastImportFailure() } catch { /* fall back below */ }
+      setImportFailure(failure || {
+        file: path.split(/[\\/]/).pop(),
+        error: String(err),
+        outcome: 'The import did not complete.',
+        inImportsList: false,
+      })
+      // Events committed before the failure (finalize, metadata, or reload
+      // stage) are in the open database: reload so they show, and refresh the
+      // filter panel. A new database that was closed after the failure, or a
+      // failure that committed nothing, needs no reload.
+      if (failure && failure.eventsAdded > 0 && !failure.newDatabase) {
+        try {
+          const info = await GetCurrentDBInfo()
+          if (info) {
+            setDbInfo(info)
+            setFilterVersion(v => v + 1)
+            await loadPage(1, info)
+            setStatus('Error: ' + err)
+          }
+        } catch { /* the dialog already reports the failure */ }
+      }
     } finally {
       setImporting(false)
     }
@@ -1291,6 +1366,7 @@ function App() {
     const cancelHelp = EventsOn('menu:help', () => { setShowHelp(true) })
     const cancelLogging = EventsOn('menu:logging', () => { setShowLogging(true) })
     const cancelSettings = EventsOn('menu:settings', () => { setShowSettings(true) })
+    const cancelImports = EventsOn('menu:imports', () => { setShowImports(true) })
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
@@ -1306,6 +1382,7 @@ function App() {
       if (typeof cancelHelp === 'function') cancelHelp()
       if (typeof cancelLogging === 'function') cancelLogging()
       if (typeof cancelSettings === 'function') cancelSettings()
+      if (typeof cancelImports === 'function') cancelImports()
     }
   }, [handleOpenDB, handleImportCSV, handleImportFolderRecursive, handleCloseDB, handleExportCSV])
 
@@ -1357,56 +1434,142 @@ function App() {
 
   const activeTab = tabs.find(t => t.id === activeTabId)
 
-  // If no database is open, show the welcome screen
-  const importLabelDialog = (
-    <ImportLabelDialog
-      visible={importPick !== null}
-      title={importPick?.kind === 'folder' ? 'Import Folder (Recursive)' : 'Import Timeline'}
-      defaultLabel={importPick?.defaultLabel || ''}
-      onImport={handleImportConfirmed}
-      onCancel={() => setImportPick(null)}
-    />
+  // Every dialog and overlay, rendered by both the welcome-screen tree and the
+  // main tree below, so each one can appear with or without a database open.
+  // Each dialog's own state controls its visibility; dialogs that need a
+  // database are simply never opened without one. Add new dialogs here.
+  const sharedDialogs = (
+    <>
+      <ImportProgress visible={importing} />
+
+      <ImportLabelDialog
+        visible={importPick !== null}
+        title={importPick?.kind === 'folder' ? 'Import Folder (Recursive)' : 'Import Timeline'}
+        defaultLabel={importPick?.defaultLabel || ''}
+        onImport={handleImportConfirmed}
+        onCancel={() => setImportPick(null)}
+      />
+
+      <ColumnChooser
+        visible={showColumnChooser}
+        columns={columnDefs}
+        onToggle={handleToggleColumn}
+        onClose={() => setShowColumnChooser(false)}
+      />
+
+      <ThemePicker
+        visible={showThemePicker}
+        currentTheme={currentTheme}
+        onSelect={handleSelectTheme}
+        onClose={() => setShowThemePicker(false)}
+      />
+
+      <AboutDialog
+        visible={showAbout}
+        version={version}
+        onClose={() => setShowAbout(false)}
+      />
+
+      <HelpDialog
+        visible={showHelp}
+        onClose={() => setShowHelp(false)}
+      />
+
+      <LoggingDialog
+        visible={showLogging}
+        onClose={() => setShowLogging(false)}
+      />
+
+      <SettingsDialog
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        onTabLimitChange={handleSetTabLimit}
+      />
+
+      <PostgresDialog
+        visible={showPostgres}
+        onConnect={handlePostgresConnect}
+        onClose={() => setShowPostgres(false)}
+      />
+
+      <RecursiveImportSummaryDialog
+        visible={showRecursiveSummary}
+        summary={recursiveSummary}
+        onClose={() => setShowRecursiveSummary(false)}
+      />
+
+      <ImportNoticeDialog
+        notice={importNotice}
+        onClose={() => setImportNotice(null)}
+      />
+
+      <ImportFailureDialog
+        failure={importFailure}
+        onClose={() => setImportFailure(null)}
+        onShowImports={() => { setImportFailure(null); setShowImports(true) }}
+      />
+
+      <ReadOnlyDatabaseDialog
+        failure={readOnlyOpen}
+        onClose={() => setReadOnlyOpen(null)}
+      />
+
+      <ImportsDialog
+        visible={showImports}
+        hasDatabase={!!dbInfo}
+        onClose={() => setShowImports(false)}
+      />
+
+      <OffsetUpgradeDialog
+        request={offsetPrompt}
+        onResolve={handleOffsetResolve}
+        onRunningChange={handleOffsetRunningChange}
+      />
+
+      <PostgresDialog
+        visible={showPushPostgres}
+        mode="push"
+        onPush={handlePushToPostgres}
+        onClose={() => setShowPushPostgres(false)}
+      />
+
+      <AddNoteDialog
+        visible={showAddNote}
+        onClose={() => setShowAddNote(false)}
+        onAdded={handleNoteAdded}
+      />
+
+      {showCloseConfirm && (
+        <div className="modal-overlay">
+          <div className="settings-dialog" onClick={e => e.stopPropagation()}>
+            <div className="logging-header">
+              <h2>Close 4n6time?</h2>
+            </div>
+            <div className="logging-content">
+              <p>Any open tabs will be saved for next session.</p>
+              <div className="logging-actions">
+                <button onClick={async () => {
+                  try {
+                    if (dbInfoRef.current) {
+                      const sessionData = buildTabSessionJSON(tabsRef.current, activeTabIdRef.current, liveTabStateRef.current)
+                      await SaveTabSession(sessionData).catch(() => {})
+                    }
+                  } catch { /* ignore save errors */ }
+                  ForceQuit()
+                }}>Close</button>
+                <button className="logging-close-btn" onClick={() => setShowCloseConfirm(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 
   if (!dbInfo) {
     return (
       <div className="app-container">
-        <ImportProgress visible={importing} />
-        {importLabelDialog}
-        <ThemePicker
-          visible={showThemePicker}
-          currentTheme={currentTheme}
-          onSelect={handleSelectTheme}
-          onClose={() => setShowThemePicker(false)}
-        />
-        <AboutDialog
-          visible={showAbout}
-          version={version}
-          onClose={() => setShowAbout(false)}
-        />
-        <HelpDialog
-          visible={showHelp}
-          onClose={() => setShowHelp(false)}
-        />
-        <LoggingDialog
-          visible={showLogging}
-          onClose={() => setShowLogging(false)}
-        />
-        <SettingsDialog
-          visible={showSettings}
-          onClose={() => setShowSettings(false)}
-          onTabLimitChange={handleSetTabLimit}
-        />
-        <PostgresDialog
-          visible={showPostgres}
-          onConnect={handlePostgresConnect}
-          onClose={() => setShowPostgres(false)}
-        />
-        <RecursiveImportSummaryDialog
-          visible={showRecursiveSummary}
-          summary={recursiveSummary}
-          onClose={() => setShowRecursiveSummary(false)}
-        />
+        {sharedDialogs}
         <div className="welcome">
           <h1>4n6time</h1>
           <p>Forensic Timeline Viewer</p>
@@ -1427,9 +1590,6 @@ function App() {
 
   return (
     <div className="app-container">
-      <ImportProgress visible={importing} />
-      {importLabelDialog}
-
       <div className="toolbar">
         <button onClick={handleOpenDB}>Open</button>
         <button onClick={handleImportCSV}>Import</button>
@@ -1587,96 +1747,7 @@ function App() {
         )
       })()}
 
-      <ColumnChooser
-        visible={showColumnChooser}
-        columns={columnDefs}
-        onToggle={handleToggleColumn}
-        onClose={() => setShowColumnChooser(false)}
-      />
-
-      <ThemePicker
-        visible={showThemePicker}
-        currentTheme={currentTheme}
-        onSelect={handleSelectTheme}
-        onClose={() => setShowThemePicker(false)}
-      />
-
-      <AboutDialog
-        visible={showAbout}
-        version={version}
-        onClose={() => setShowAbout(false)}
-      />
-
-      <HelpDialog
-        visible={showHelp}
-        onClose={() => setShowHelp(false)}
-      />
-
-      <LoggingDialog
-        visible={showLogging}
-        onClose={() => setShowLogging(false)}
-      />
-
-      <SettingsDialog
-        visible={showSettings}
-        onClose={() => setShowSettings(false)}
-        onTabLimitChange={handleSetTabLimit}
-      />
-
-      <RecursiveImportSummaryDialog
-        visible={showRecursiveSummary}
-        summary={recursiveSummary}
-        onClose={() => setShowRecursiveSummary(false)}
-      />
-
-      <ImportNoticeDialog
-        notice={importNotice}
-        onClose={() => setImportNotice(null)}
-      />
-
-      <OffsetUpgradeDialog
-        request={offsetPrompt}
-        onResolve={handleOffsetResolve}
-        onRunningChange={handleOffsetRunningChange}
-      />
-
-      <PostgresDialog
-        visible={showPushPostgres}
-        mode="push"
-        onPush={handlePushToPostgres}
-        onClose={() => setShowPushPostgres(false)}
-      />
-
-      <AddNoteDialog
-        visible={showAddNote}
-        onClose={() => setShowAddNote(false)}
-        onAdded={handleNoteAdded}
-      />
-
-      {showCloseConfirm && (
-        <div className="modal-overlay">
-          <div className="settings-dialog" onClick={e => e.stopPropagation()}>
-            <div className="logging-header">
-              <h2>Close 4n6time?</h2>
-            </div>
-            <div className="logging-content">
-              <p>Any open tabs will be saved for next session.</p>
-              <div className="logging-actions">
-                <button onClick={async () => {
-                  try {
-                    if (dbInfoRef.current) {
-                      const sessionData = buildTabSessionJSON(tabsRef.current, activeTabIdRef.current, liveTabStateRef.current)
-                      await SaveTabSession(sessionData).catch(() => {})
-                    }
-                  } catch { /* ignore save errors */ }
-                  ForceQuit()
-                }}>Close</button>
-                <button className="logging-close-btn" onClick={() => setShowCloseConfirm(false)}>Cancel</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {sharedDialogs}
 
       {/* Right-click context menu overlay */}
       {contextMenu && (

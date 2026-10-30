@@ -158,6 +158,36 @@ export namespace main {
 	        this.value = source["value"];
 	    }
 	}
+	export class ImportFailure {
+	    file: string;
+	    path: string;
+	    error: string;
+	    stage: string;
+	    importId: number;
+	    eventsAdded: number;
+	    backend: string;
+	    newDatabase: string;
+	    outcome: string;
+	    inImportsList: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file = source["file"];
+	        this.path = source["path"];
+	        this.error = source["error"];
+	        this.stage = source["stage"];
+	        this.importId = source["importId"];
+	        this.eventsAdded = source["eventsAdded"];
+	        this.backend = source["backend"];
+	        this.newDatabase = source["newDatabase"];
+	        this.outcome = source["outcome"];
+	        this.inImportsList = source["inImportsList"];
+	    }
+	}
 	export class LoggingStatus {
 	    enabled: boolean;
 	    filePath: string;
@@ -264,6 +294,22 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ReadOnlyOpenFailure {
+	    path: string;
+	    file: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReadOnlyOpenFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.file = source["file"];
+	        this.error = source["error"];
+	    }
+	}
 	export class TimelineBucket {
 	    timestamp: string;
 	    count: number;
@@ -367,6 +413,7 @@ export namespace model {
 	    imported_at: string;
 	    event_count: number;
 	    status: string;
+	    error_message: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImportRecord(source);
@@ -381,6 +428,7 @@ export namespace model {
 	        this.imported_at = source["imported_at"];
 	        this.event_count = source["event_count"];
 	        this.status = source["status"];
+	        this.error_message = source["error_message"];
 	    }
 	}
 

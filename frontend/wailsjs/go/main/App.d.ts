@@ -51,11 +51,15 @@ export function GetImport(arg1:number):Promise<model.ImportRecord>;
 
 export function GetImports():Promise<Array<model.ImportRecord>>;
 
+export function GetLastImportFailure():Promise<main.ImportFailure>;
+
 export function GetLoggingStatus():Promise<main.LoggingStatus>;
 
 export function GetMinMaxDate():Promise<Array<string>>;
 
 export function GetPostgresHost():Promise<string>;
+
+export function GetReadOnlyOpenFailure():Promise<main.ReadOnlyOpenFailure>;
 
 export function GetSavedQueries():Promise<Array<database.SavedQuery>>;
 

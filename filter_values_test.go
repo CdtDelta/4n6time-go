@@ -52,10 +52,10 @@ func fvFixture(t *testing.T, store database.Store) (completeID int64) {
 	if _, err := store.InsertEvents(events, nil); err != nil {
 		t.Fatalf("InsertEvents: %v", err)
 	}
-	if err := store.FinalizeImport(completeID, 4, model.ImportStatusComplete); err != nil {
+	if err := store.FinalizeImport(completeID, 4, model.ImportStatusComplete, ""); err != nil {
 		t.Fatalf("FinalizeImport: %v", err)
 	}
-	if err := store.FinalizeImport(failedID, 0, model.ImportStatusFailed); err != nil {
+	if err := store.FinalizeImport(failedID, 0, model.ImportStatusFailed, ""); err != nil {
 		t.Fatalf("FinalizeImport: %v", err)
 	}
 	for _, n := range []string{"first note", "second note"} {

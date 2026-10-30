@@ -66,4 +66,8 @@ type ImportRecord struct {
 	ImportedAt string `json:"imported_at"`
 	EventCount int64  `json:"event_count"`
 	Status     string `json:"status"`
+	// ErrorMessage is the error text of a failed import. It is empty for
+	// complete and in_progress imports, and for imports recorded before
+	// v0.19.0 (the column is NULL there).
+	ErrorMessage string `json:"error_message"`
 }

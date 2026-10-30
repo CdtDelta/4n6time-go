@@ -73,10 +73,11 @@ type Store interface {
 	LoadTabSession() (string, error)
 
 	// Import provenance. CreateImport records a run as in_progress and returns its ID;
-	// FinalizeImport sets the event count and a final status (complete or failed).
-	// GetImport returns nil, nil when the ID does not exist.
+	// FinalizeImport sets the event count, a final status (complete or failed),
+	// and, for a failed import, its error text (stored in error_message; NULL
+	// otherwise). GetImport returns nil, nil when the ID does not exist.
 	CreateImport(rec model.ImportRecord) (int64, error)
-	FinalizeImport(id int64, eventCount int, status string) error
+	FinalizeImport(id int64, eventCount int, status, errorMessage string) error
 	GetImports() ([]model.ImportRecord, error)
 	GetImport(id int64) (*model.ImportRecord, error)
 

@@ -471,22 +471,7 @@ func (db *PostgresStore) createSchema(indexFields []string) error {
 
 // InsertEvent inserts a single event into the database.
 func (db *PostgresStore) InsertEvent(e *model.Event) error {
-	_, err := db.conn.Exec(db.dialect.InsertEventSQL(),
-		pgSanitizeString(e.Timezone), pgSanitizeString(e.MACB),
-		pgSanitizeString(e.Source), pgSanitizeString(e.SourceType), pgSanitizeString(e.Type),
-		pgSanitizeString(e.User), pgSanitizeString(e.Host), pgSanitizeString(e.Desc),
-		pgSanitizeString(e.Filename), pgSanitizeString(e.Inode),
-		pgSanitizeString(e.Notes), pgSanitizeString(e.Format), pgSanitizeString(e.Extra),
-		pgSanitizeDatetime(e.Datetime), pgSanitizeString(e.ReportNotes),
-		pgSanitizeString(e.InReport), pgSanitizeString(e.Tag), pgSanitizeString(e.Color),
-		e.Offset, e.StoreNumber,
-		e.StoreIndex, e.VSSStoreNumber, pgSanitizeString(e.URL),
-		pgSanitizeString(e.RecordNumber),
-		pgSanitizeString(e.EventID), pgSanitizeString(e.EventType),
-		pgSanitizeString(e.SourceName), pgSanitizeString(e.UserSID),
-		pgSanitizeString(e.ComputerName),
-		e.Bookmark, importIDArg(e.ImportID),
-	)
+	_, err := db.conn.Exec(db.dialect.InsertEventSQL(), pgInsertEventArgs(e)...)
 	return err
 }
 
@@ -508,24 +493,9 @@ func (db *PostgresStore) InsertEvents(events []*model.Event, onProgress func(cou
 
 	inserted := 0
 	for _, e := range events {
-		_, err := stmt.Exec(
-			pgSanitizeString(e.Timezone), pgSanitizeString(e.MACB),
-			pgSanitizeString(e.Source), pgSanitizeString(e.SourceType), pgSanitizeString(e.Type),
-			pgSanitizeString(e.User), pgSanitizeString(e.Host), pgSanitizeString(e.Desc),
-			pgSanitizeString(e.Filename), pgSanitizeString(e.Inode),
-			pgSanitizeString(e.Notes), pgSanitizeString(e.Format), pgSanitizeString(e.Extra),
-			pgSanitizeDatetime(e.Datetime), pgSanitizeString(e.ReportNotes),
-			pgSanitizeString(e.InReport), pgSanitizeString(e.Tag), pgSanitizeString(e.Color),
-			e.Offset, e.StoreNumber,
-			e.StoreIndex, e.VSSStoreNumber, pgSanitizeString(e.URL),
-			pgSanitizeString(e.RecordNumber),
-			pgSanitizeString(e.EventID), pgSanitizeString(e.EventType),
-			pgSanitizeString(e.SourceName), pgSanitizeString(e.UserSID),
-			pgSanitizeString(e.ComputerName),
-			e.Bookmark, importIDArg(e.ImportID),
-		)
-		if err != nil {
-			return inserted, fmt.Errorf("inserting event %d: %w", inserted+1, err)
+		args := pgInsertEventArgs(e)
+		if _, err := stmt.Exec(args...); err != nil {
+			return inserted, wrapInsertError(err, inserted+1, args)
 		}
 		inserted++
 		if onProgress != nil && inserted%10000 == 0 {

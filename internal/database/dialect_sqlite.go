@@ -126,10 +126,15 @@ func (d *SQLiteDialect) CreateImportsTableSQL() string {
 		format TEXT,
 		imported_at TEXT,
 		event_count INT DEFAULT 0,
-		status TEXT
+		status TEXT,
+		error_message TEXT
 	)`
 }
 
 func (d *SQLiteDialect) InsertImportSQL() string {
 	return `INSERT INTO l2t_imports (filename, label, format, imported_at, event_count, status) VALUES (?, ?, ?, ?, ?, ?)`
+}
+
+func (d *SQLiteDialect) AddImportErrorColumnSQL() string {
+	return `ALTER TABLE l2t_imports ADD COLUMN error_message TEXT`
 }

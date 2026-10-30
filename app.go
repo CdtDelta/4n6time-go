@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -33,6 +34,17 @@ type App struct {
 	logPath    string
 	logPersist bool
 	logMu      sync.Mutex
+
+	// lastImportFailure is the failure from the most recent ImportCSV call,
+	// read by the frontend's failure dialog (GetLastImportFailure).
+	// importFailMu guards it and lastReadOnlyOpen.
+	lastImportFailure *ImportFailure
+	importFailMu      sync.Mutex
+
+	// lastReadOnlyOpen is set when the most recent OpenDatabase failed because
+	// the database needs a migration and is on read-only storage
+	// (GetReadOnlyOpenFailure).
+	lastReadOnlyOpen *ReadOnlyOpenFailure
 }
 
 // NewApp creates a new App instance.
@@ -75,6 +87,7 @@ func (a *App) logWrite(level, msg string) {
 }
 
 func (a *App) logInfo(msg string)  { a.logWrite("INFO", msg) }
+func (a *App) logWarn(msg string)  { a.logWrite("WARN", msg) }
 func (a *App) logError(msg string) { a.logWrite("ERROR", msg) }
 
 func (a *App) loadLoggingConfig() {
@@ -178,7 +191,10 @@ func (a *App) CloseDatabase() {
 
 // OpenDatabase opens a file dialog and loads an existing database.
 func (a *App) OpenDatabase() (*DBInfo, error) {
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	// Clear here as well as in loadDatabase, so a cancelled dialog does not
+	// leave an earlier read-only failure for the frontend to find.
+	a.setReadOnlyOpenFailure(nil)
+	path, err := openDatabaseDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Open 4n6time Database",
 		Filters: []runtime.FileFilter{
 			{DisplayName: "SQLite Database (*.db)", Pattern: "*.db"},
@@ -194,6 +210,10 @@ func (a *App) OpenDatabase() (*DBInfo, error) {
 
 	return a.loadDatabase(path)
 }
+
+// openDatabaseDialog shows OpenDatabase's file chooser. Tests replace it,
+// since the Wails dialog needs a runtime context.
+var openDatabaseDialog = runtime.OpenFileDialog
 
 // SelectImportFile opens the file dialog for a timeline file to import and
 // returns the chosen path, or "" if the user cancelled.
@@ -232,14 +252,20 @@ func (a *App) emit(name string, data map[string]interface{}) {
 // label is an optional examiner-supplied name (for example a hostname) stored
 // on the import record; it may be empty. An empty csvPath cancels the import.
 func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
+	a.setLastImportFailure(nil)
 	if csvPath == "" {
 		return nil, nil
 	}
 
+	// fail describes every failure for the dialog and the log. Backend and
+	// NewDatabase are updated once the target store is known.
+	fail := ImportFailure{Path: csvPath, Backend: a.driver}
+
 	// The registry defines detection order; the first matching format wins.
 	format, formatLabel, err := importer.DetectFile(csvPath)
 	if err != nil {
-		return nil, err
+		fail.Stage = importStageDetect
+		return nil, a.importFailed(fail, err)
 	}
 	formatName := format.Name
 
@@ -260,7 +286,8 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 			},
 		})
 		if err != nil {
-			return nil, err
+			fail.Stage = importStageCreateDB
+			return nil, a.importFailed(fail, err)
 		}
 		if dbPath == "" {
 			return nil, nil
@@ -272,11 +299,14 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 			a.store = nil
 		}
 
+		fail.Backend = "sqlite"
 		var createErr error
 		store, createErr = database.CreateStore("sqlite", dbPath, nil)
 		if createErr != nil {
-			return nil, fmt.Errorf("creating database: %w", createErr)
+			fail.Stage = importStageCreateDB
+			return nil, a.importFailed(fail, fmt.Errorf("creating database: %w", createErr))
 		}
+		fail.NewDatabase = dbPath
 	} else {
 		store = a.store
 	}
@@ -318,11 +348,24 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 	// ImportFile records the import, stamps its events, and finalizes the record.
 	// The import error text is the same one Format.Import produces.
 	res, err := importer.ImportFile(csvPath, format, formatLabel, label, store, progress, a.logWrite)
+	fail.ImportID = res.ID
 	if err != nil {
 		closeOnError()
-		return nil, err
+		switch {
+		case res.ID == 0:
+			fail.Stage = importStageRecord
+		case res.ImportErr != nil && res.RecordErr != nil:
+			fail.Stage = importStageImportUnrecorded
+		case res.ImportErr != nil:
+			fail.Stage = importStageImport
+		default:
+			fail.Stage = importStageFinalize
+			fail.EventsAdded = res.Count
+		}
+		return nil, a.importFailed(fail, err)
 	}
 	total := res.Count
+	fail.EventsAdded = total
 
 	// Update metadata tables
 	a.emit("import:progress", map[string]interface{}{
@@ -330,7 +373,8 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 	})
 	if err := store.UpdateMetadata(); err != nil {
 		closeOnError()
-		return nil, fmt.Errorf("updating metadata: %w", err)
+		fail.Stage = importStageMetadata
+		return nil, a.importFailed(fail, fmt.Errorf("updating metadata: %w", err))
 	}
 	a.logInfo("Metadata update complete")
 
@@ -345,7 +389,9 @@ func (a *App) ImportCSV(csvPath, label string) (*DBInfo, error) {
 
 	info, err := a.getDBInfo()
 	if err != nil {
-		return nil, err
+		fail.Stage = importStageReload
+		fail.NewDatabase = "" // the new database is open now
+		return nil, a.importFailed(fail, err)
 	}
 	if info != nil {
 		info.ImportedEvents = total
@@ -1797,6 +1843,8 @@ type DBInfo struct {
 }
 
 func (a *App) loadDatabase(path string) (*DBInfo, error) {
+	a.setReadOnlyOpenFailure(nil)
+
 	// Close any existing database
 	if a.store != nil {
 		a.store.Close()
@@ -1805,6 +1853,10 @@ func (a *App) loadDatabase(path string) (*DBInfo, error) {
 
 	store, err := database.OpenStore("sqlite", path)
 	if err != nil {
+		if errors.Is(err, database.ErrReadOnlyUpgrade) {
+			a.logWarn("Database on read-only storage needs an upgrade and was not opened: " + path + ": " + err.Error())
+			a.setReadOnlyOpenFailure(&ReadOnlyOpenFailure{Path: path, File: filepath.Base(path), Error: err.Error()})
+		}
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 

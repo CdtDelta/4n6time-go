@@ -25,10 +25,15 @@ const minimalMFTECmdBootCSV = "EntryPoint,Signature,BytesPerSector,SectorsPerClu
 type mockStore struct {
 	insertedCount int
 	imports       []model.ImportRecord
+	// insertErr, when set, makes InsertEvents fail with it.
+	insertErr error
 }
 
 func (m *mockStore) InsertEvent(_ *model.Event) error { return nil }
 func (m *mockStore) InsertEvents(events []*model.Event, _ func(int)) (int, error) {
+	if m.insertErr != nil {
+		return 0, m.insertErr
+	}
 	m.insertedCount += len(events)
 	return len(events), nil
 }
@@ -80,11 +85,15 @@ func (m *mockStore) CreateImport(rec model.ImportRecord) (int64, error) {
 	m.imports = append(m.imports, rec)
 	return rec.ID, nil
 }
-func (m *mockStore) FinalizeImport(id int64, eventCount int, status string) error {
+func (m *mockStore) FinalizeImport(id int64, eventCount int, status, errorMessage string) error {
 	for i := range m.imports {
 		if m.imports[i].ID == id {
 			m.imports[i].EventCount = int64(eventCount)
 			m.imports[i].Status = status
+			m.imports[i].ErrorMessage = ""
+			if status == model.ImportStatusFailed {
+				m.imports[i].ErrorMessage = errorMessage
+			}
 			return nil
 		}
 	}

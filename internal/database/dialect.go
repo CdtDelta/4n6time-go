@@ -94,4 +94,10 @@ type Dialect interface {
 	// with columns (filename, label, format, imported_at, event_count, status).
 	// PostgreSQL appends RETURNING id; SQLite callers read LastInsertId instead.
 	InsertImportSQL() string
+
+	// AddImportErrorColumnSQL returns the ALTER that adds l2t_imports.error_message
+	// to a table created before v0.19.0. The migration runs it only when
+	// SchemaCheckColumnSQL finds no column. PostgreSQL also uses ADD COLUMN IF
+	// NOT EXISTS, so two connections migrating at once cannot fail on it.
+	AddImportErrorColumnSQL() string
 }

@@ -15,6 +15,9 @@ const (
 	SkipReasonUnrecognizedFormat = "unrecognized format"
 	SkipReasonEmptyFile          = "empty file"
 	SkipReasonParseError         = "parse error: "
+	// SkipReasonInsertError marks a file that parsed but whose events the
+	// database rejected (InsertEvents failed); no events from it were added.
+	SkipReasonInsertError = "insert error: "
 )
 
 // ToolStats holds per-tool import metrics. UnparseableCount is the number of
@@ -142,7 +145,7 @@ func ImportFolderRecursive(root string, store database.Store, label string, logf
 			continue
 		}
 		if res.ImportErr != nil {
-			skip(e.rel, SkipReasonParseError+innerError(res.ImportErr).Error())
+			skip(e.rel, importSkipReason(res.ImportErr))
 			continue
 		}
 		// A finalize failure here leaves the events in place, so the file
@@ -271,6 +274,18 @@ func detectRecursive(formats []*Format, path, ext string) (*Format, string, erro
 		}
 	}
 	return nil, "", firstErr
+}
+
+// importSkipReason is the skipped-list reason for a file whose import
+// failed: SkipReasonInsertError when the file parsed but InsertEvents failed
+// (an *InsertError), SkipReasonParseError otherwise. Both are followed by the
+// error text without the "inserting events:" or "reading X:" wrapper.
+func importSkipReason(err error) string {
+	var insertErr *InsertError
+	if errors.As(err, &insertErr) {
+		return SkipReasonInsertError + insertErr.Err.Error()
+	}
+	return SkipReasonParseError + innerError(err).Error()
 }
 
 // innerError strips the single "reading X:" or "inserting events:" wrapper

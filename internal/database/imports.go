@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cdtdelta/4n6time/internal/model"
 )
@@ -44,7 +46,7 @@ func checkUpdatableField(field string) error {
 
 // importColumns is the SELECT list for l2t_imports. Scan order matches
 // model.ImportRecord and each store's scan helper.
-const importColumns = "SELECT id, filename, label, format, imported_at, event_count, status FROM l2t_imports"
+const importColumns = "SELECT id, filename, label, format, imported_at, event_count, status, error_message FROM l2t_imports"
 
 // sqlRunner is satisfied by *sql.DB and *sql.Tx, so the same migration runs
 // on open and inside schema creation.
@@ -54,9 +56,11 @@ type sqlRunner interface {
 }
 
 // migrateImportProvenance creates the l2t_imports table, adds the
-// log2timeline.import_id column when missing, and indexes it. Every step is
-// idempotent, so running it on an already-migrated database changes nothing.
-// Existing rows keep NULL import_id, which reads back as 0.
+// log2timeline.import_id column when missing, and indexes it. It also adds
+// l2t_imports.error_message (v0.19.0) to an older l2t_imports table. Every
+// step is idempotent, so running it on an already-migrated database changes
+// nothing. Existing rows keep NULL import_id, which reads back as 0, and NULL
+// error_message, which reads back as "".
 //
 // Schema creation calls this before it creates any index. CREATE TABLE IF NOT
 // EXISTS keeps a pre-provenance log2timeline table without import_id, so the
@@ -64,6 +68,9 @@ type sqlRunner interface {
 func migrateImportProvenance(conn sqlRunner, d Dialect) error {
 	if _, err := conn.Exec(d.CreateImportsTableSQL()); err != nil {
 		return fmt.Errorf("creating l2t_imports table: %w", err)
+	}
+	if err := addImportErrorColumn(conn, d); err != nil {
+		return err
 	}
 
 	var count int
@@ -80,6 +87,49 @@ func migrateImportProvenance(conn sqlRunner, d Dialect) error {
 		return fmt.Errorf("creating import_id index: %w", err)
 	}
 	return nil
+}
+
+// addImportErrorColumn adds l2t_imports.error_message when it is missing. The
+// column is nullable with no default, so existing rows read back as no error.
+func addImportErrorColumn(conn sqlRunner, d Dialect) error {
+	var count int
+	if err := conn.QueryRow(d.SchemaCheckColumnSQL("l2t_imports", "error_message")).Scan(&count); err != nil {
+		return fmt.Errorf("checking for error_message column: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+	if _, err := conn.Exec(d.AddImportErrorColumnSQL()); err != nil {
+		return fmt.Errorf("adding error_message column: %w", err)
+	}
+	return nil
+}
+
+// maxImportErrorLen caps the stored error text, in bytes. Parser errors can
+// quote file content, and the Imports list only needs enough to diagnose.
+const maxImportErrorLen = 4000
+
+// importErrorArg converts a FinalizeImport error message to its column value.
+// Only a failed import keeps its text; anything else, or an empty message,
+// becomes SQL NULL. The text is made valid UTF-8 without NUL bytes, because
+// PostgreSQL rejects both and a rejected UPDATE would leave the record in
+// progress, and it is cut to maxImportErrorLen on a rune boundary.
+func importErrorArg(status, msg string) interface{} {
+	if status != model.ImportStatusFailed {
+		return nil
+	}
+	msg = strings.ReplaceAll(strings.ToValidUTF8(msg, "\uFFFD"), "\x00", "")
+	if len(msg) > maxImportErrorLen {
+		cut := maxImportErrorLen
+		for cut > 0 && !utf8.RuneStart(msg[cut]) {
+			cut--
+		}
+		msg = msg[:cut] + "..."
+	}
+	if msg == "" {
+		return nil
+	}
+	return msg
 }
 
 // importIDArg converts an in-memory ImportID to its column value. Zero becomes
@@ -144,8 +194,10 @@ func (db *SQLiteStore) CreateImport(rec model.ImportRecord) (int64, error) {
 	return id, nil
 }
 
-// FinalizeImport sets the event count and final status (complete or failed) on an import.
-func (db *SQLiteStore) FinalizeImport(id int64, eventCount int, status string) error {
+// FinalizeImport sets the event count, final status (complete or failed), and
+// error text on an import. errorMessage is stored only for a failed import;
+// it is NULL for a complete one, and for a failed one with no text.
+func (db *SQLiteStore) FinalizeImport(id int64, eventCount int, status, errorMessage string) error {
 	if err := validateFinalStatus(status); err != nil {
 		return err
 	}
@@ -154,8 +206,8 @@ func (db *SQLiteStore) FinalizeImport(id int64, eventCount int, status string) e
 	}
 	ph := db.dialect.Placeholder
 	result, err := db.conn.Exec(
-		"UPDATE l2t_imports SET event_count = "+ph(1)+", status = "+ph(2)+" WHERE id = "+ph(3),
-		eventCount, status, id)
+		"UPDATE l2t_imports SET event_count = "+ph(1)+", status = "+ph(2)+", error_message = "+ph(3)+" WHERE id = "+ph(4),
+		eventCount, status, importErrorArg(status, errorMessage), id)
 	if err != nil {
 		return fmt.Errorf("finalizing import %d: %w", id, err)
 	}
@@ -212,9 +264,10 @@ func sqliteScanImport(row rowScanner) (model.ImportRecord, error) {
 	var (
 		rec                                         model.ImportRecord
 		filename, label, format, importedAt, status sql.NullString
+		errorMessage                                sql.NullString
 		eventCount                                  sql.NullInt64
 	)
-	err := row.Scan(&rec.ID, &filename, &label, &format, &importedAt, &eventCount, &status)
+	err := row.Scan(&rec.ID, &filename, &label, &format, &importedAt, &eventCount, &status, &errorMessage)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return rec, err
@@ -227,6 +280,7 @@ func sqliteScanImport(row rowScanner) (model.ImportRecord, error) {
 	rec.ImportedAt = importedAt.String
 	rec.EventCount = eventCount.Int64
 	rec.Status = status.String
+	rec.ErrorMessage = errorMessage.String
 	return rec, nil
 }
 
@@ -249,8 +303,10 @@ func (db *PostgresStore) CreateImport(rec model.ImportRecord) (int64, error) {
 	return id, nil
 }
 
-// FinalizeImport sets the event count and final status (complete or failed) on an import.
-func (db *PostgresStore) FinalizeImport(id int64, eventCount int, status string) error {
+// FinalizeImport sets the event count, final status (complete or failed), and
+// error text on an import. errorMessage is stored only for a failed import;
+// it is NULL for a complete one, and for a failed one with no text.
+func (db *PostgresStore) FinalizeImport(id int64, eventCount int, status, errorMessage string) error {
 	if err := validateFinalStatus(status); err != nil {
 		return err
 	}
@@ -259,8 +315,8 @@ func (db *PostgresStore) FinalizeImport(id int64, eventCount int, status string)
 	}
 	ph := db.dialect.Placeholder
 	result, err := db.conn.Exec(
-		"UPDATE l2t_imports SET event_count = "+ph(1)+", status = "+ph(2)+" WHERE id = "+ph(3),
-		eventCount, status, id)
+		"UPDATE l2t_imports SET event_count = "+ph(1)+", status = "+ph(2)+", error_message = "+ph(3)+" WHERE id = "+ph(4),
+		eventCount, status, importErrorArg(status, errorMessage), id)
 	if err != nil {
 		return fmt.Errorf("finalizing import %d: %w", id, err)
 	}
@@ -312,10 +368,11 @@ func pgScanImport(row rowScanner) (model.ImportRecord, error) {
 	var (
 		rec                             model.ImportRecord
 		filename, label, format, status sql.NullString
+		errorMessage                    sql.NullString
 		importedAt                      sql.NullTime
 		eventCount                      sql.NullInt64
 	)
-	err := row.Scan(&rec.ID, &filename, &label, &format, &importedAt, &eventCount, &status)
+	err := row.Scan(&rec.ID, &filename, &label, &format, &importedAt, &eventCount, &status, &errorMessage)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return rec, err
@@ -330,5 +387,6 @@ func pgScanImport(row rowScanner) (model.ImportRecord, error) {
 	}
 	rec.EventCount = eventCount.Int64
 	rec.Status = status.String
+	rec.ErrorMessage = errorMessage.String
 	return rec, nil
 }
