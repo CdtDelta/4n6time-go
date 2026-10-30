@@ -20,6 +20,12 @@ Forensic timeline analysis tool, rewritten from Python to Go. Desktop applicatio
 - **Bulk select and edit**: shift-click or ctrl-click to select multiple rows, then apply color, tags, or bookmarks to all at once
 - **Multi-import**: import additional timeline files into an already-open database to combine evidence sources
 - **Import provenance**: every import is recorded with an optional label (for example, a hostname). Each event shows its import in the detail panel, can be filtered or pivoted by import, and exports with an `import_file` column
+- **Imports list** (File > Imports...): every import record in the open database, with its label, file, status, event count, import time, and error text; failed imports are highlighted
+- **Import failure dialog**: a failed import shows the file, the error, and what was left in the database, with a button to the Imports list
+- **Clear open errors**: a database on read-only storage that needs a one-time upgrade gets a dialog explaining how to open a copy, and any other file that cannot be opened gets a dialog with a plain explanation, the error, and which database is still open. The current database stays open when another fails to open
+- **Recount Events** (Tools > Recount Events): recounts the events and corrects the stored total if it ever looks wrong
+- **PostgreSQL connect timeout and Cancel**: a connection attempt gives up after 10 seconds with a plain message, Cancel stops an attempt in progress, and Reset restores the connection dialog's fields
+- **Large databases**: the event total is cached, the filter panel loads its values without scanning every event, Clear Filters is fast, superseded page loads are cancelled on the server, and bulk color and tag edits update the rows in place
 - **Settings** (Tools > Settings): configure tab limit, auto-restore, and default PostgreSQL hostname
 - Server-side pagination with First, Last, Go-to-page, and "Page X of Y" controls
 - Full-text search across all key event fields with keyword highlighting
@@ -219,8 +225,47 @@ The datetime column is second precision, like every other format. The full-preci
 1. Click **PostgreSQL** on the welcome screen to open the connection dialog
 2. Enter connection details: host, port, database name, username, password, and SSL mode
 3. Click **Connect** to connect to an existing database, or **Create & Connect** to create the schema on an empty database
+   - An attempt gives up after 10 seconds if the server does not answer, and **Cancel** stops an attempt in progress. A failure is explained in the dialog, with the raw error beneath, so you can fix the settings and try again
+   - **Reset** (under SSL Mode) restores every field to its starting value. The password is cleared whenever the dialog closes
 4. When connected to PostgreSQL, importing a timeline file writes directly to the server (no local file needed)
 5. To push an existing SQLite database to PostgreSQL, open the SQLite database first, then click the **Push to PostgreSQL** button in the toolbar
+
+### Large cases on PostgreSQL
+
+These server settings are starting points for cases with tens of millions of events, not requirements. Measure on your own server and adjust.
+
+- **WAL and checkpoints for bulk imports.** A large import writes a lot of WAL; a bigger `max_wal_size` and a longer `checkpoint_timeout` mean fewer forced checkpoints during the import. As a superuser:
+
+  ```sql
+  ALTER SYSTEM SET max_wal_size = '8GB';          -- 8GB or more for bulk imports
+  ALTER SYSTEM SET checkpoint_timeout = '15min';
+  SELECT pg_reload_conf();
+  ```
+
+- **Vacuum and analyze after large imports,** so the planner has current statistics and the visibility map is up to date:
+
+  ```sql
+  VACUUM (ANALYZE) log2timeline;
+  ```
+
+- **PostgreSQL in Docker: raise `shm_size`.** Docker's 64MB default shared memory can make parallel queries and vacuum fail. For example, in `docker-compose.yml`:
+
+  ```yaml
+  services:
+    postgres:
+      shm_size: 1gb
+  ```
+
+- **Finding slow queries.** Log every statement slower than a threshold, then look in the server log:
+
+  ```sql
+  ALTER SYSTEM SET log_min_duration_statement = '2s';
+  SELECT pg_reload_conf();
+  ```
+
+  Set it back with `ALTER SYSTEM RESET log_min_duration_statement;` and reload when you are done.
+
+- **A wrong port can look like a hang.** A firewall that silently drops packets to closed ports gives no answer at all, so a mistyped port looks like a stalled connection. 4n6time gives up after 10 seconds and says the server could not be reached; check the host and port first. The `PGCONNECT_TIMEOUT` environment variable (in seconds) overrides the 10-second limit.
 
 ## Acknowledgments
 

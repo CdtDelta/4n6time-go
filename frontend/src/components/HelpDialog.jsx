@@ -170,7 +170,7 @@ Max open tabs: The maximum number of tabs that can be open at once. Default is 5
 
 Auto-restore tabs: When enabled, open tabs are automatically restored the next time you open the same database, without showing the restore prompt. When disabled (default), a notification bar appears offering to restore tabs. You can restore or dismiss it.
 
-Default PostgreSQL hostname: Pre-fills the Host field in the PostgreSQL connection dialog each time it opens. Useful if you always connect to the same server. Leave blank to use "localhost" as the default. Save your changes and the next time you open the PostgreSQL dialog, the host field will be pre-filled.
+Default PostgreSQL hostname: Pre-fills the Host field in the PostgreSQL connection dialog the first time it opens after startup, and whenever you click Reset in that dialog. Later opens keep the host last typed there. Useful if you always connect to the same server. Leave blank to use "localhost" as the default.
 
 To open Settings: Use the menu Tools > Settings.`
   },
@@ -232,7 +232,7 @@ Color swatches: Click a color swatch to stage that color for application. The se
 
 Tag input: Type a tag name to stage it for application. Tags are appended to existing tags on each event, avoiding duplicates.
 
-Apply Changes: Click this button to apply the staged color and/or tag to all selected events. The button is disabled until you select a color or enter a tag. Both can be applied in a single action.
+Apply Changes: Click this button to apply the staged color and/or tag to all selected events. The button is disabled until you select a color or enter a tag. Both can be applied in a single action. The changed rows update in place without reloading the page, which keeps bulk edits fast on large databases. The page reloads only when what you are viewing depends on the changed field, for example a filter, tab, keyword search, or advanced search on color or tag.
 
 Bookmark All / Unbookmark All: Set or clear the bookmark flag on all selected events immediately (no need to click Apply Changes).
 
@@ -272,7 +272,18 @@ Export: The CSV export ends with an import_file column that names the file each 
 
 PostgreSQL: Push to PostgreSQL copies the import records, and each event stays attached to its import.
 
-Import records are read-only in the application. The label and file name cannot be edited, and records cannot be deleted from the application.`
+Import records are read-only in the application. The label and file name cannot be edited, and records cannot be deleted from the application. To see every record, use File > Imports... (see Imports List and Import Failures).`
+  },
+  {
+    id: 'imports-list',
+    title: 'Imports List and Import Failures',
+    content: `Imports list: File > Imports... lists every import record in the open database: its ID, label, file name, status, event count, the time it was imported (UTC), and the error message for a failed import. Failed imports are highlighted. The list is read-only and is read fresh each time it opens. Events imported before v0.16.0 have no import record and are not listed.
+
+Import failure dialog: When a single-file import fails, the Import Failed dialog shows the file, the error, and what the failure left in the database. In most failures that is "No events from this file were added". If the events were saved but a later step failed (for example updating the import record or the filter panel values), the dialog says so, and the grid reloads so those events appear. When the import has a record, Show Imports opens the Imports list with the failed record highlighted. The status bar also shows the error.
+
+Recursive folder import: A file that fails is listed in the summary's skipped files, as "parse error" when it could not be read, or "insert error" when it was read but the database rejected its events. Its record is marked failed with the error text.
+
+Logging: Every import failure is written to the log at ERROR level with the file name and import ID, when logging is enabled (Help > Logging).`
   },
   {
     id: 'export',
@@ -303,7 +314,15 @@ High Contrast is designed for maximum readability. Light theme is available for 
     title: 'PostgreSQL Support',
     content: `4n6time can use a PostgreSQL server as an alternative to local SQLite databases. This is useful for team environments, larger datasets, or when you want centralized storage.
 
-Connecting: Click the PostgreSQL button on the welcome screen to open the connection dialog. Enter the host, port (default 5432), database name, username, and password. The SSL mode dropdown lets you choose between disable, require, verify-ca, and verify-full depending on your server configuration.
+Connecting: Click the PostgreSQL button on the welcome screen to open the connection dialog. Enter the host, port (default 5432), database name, username, and password. The SSL Mode list offers disable, prefer, and require, depending on your server configuration.
+
+Timeout: A connection attempt gives up after 10 seconds if the server does not answer, and the dialog says "Could not reach the PostgreSQL server (no response after 10 seconds)." A wrong port can look like a hang when a firewall silently drops the connection; check the host and port first. The PGCONNECT_TIMEOUT environment variable (in seconds) overrides the 10-second limit.
+
+Cancel: While Connect or Create & Connect is running, only the button you clicked shows "Connecting..." or "Creating...". Click Cancel to stop the attempt. The dialog stays open with "Connection attempt cancelled." so you can correct the settings, and any database that was already open stays open. Closing the dialog also cancels an attempt.
+
+Errors: When a connection fails, the dialog shows a plain explanation (for example that the server could not be reached, or that the username or password was rejected) with the raw error beneath it. The status bar shows the error too.
+
+Reset: The Reset link under SSL Mode restores every field to its starting value, with the host from Settings, and clears the error. It is unavailable while an attempt is running. The password is cleared whenever the dialog closes; the other fields are kept for the next time you open it.
 
 Connect vs Create & Connect: Use "Connect" when the database already has the 4n6time schema (the log2timeline table and associated metadata tables). Use "Create & Connect" when connecting to an empty database for the first time. This creates all the required tables and indexes, then connects.
 
@@ -312,6 +331,17 @@ Importing into PostgreSQL: When you are connected to a PostgreSQL database, clic
 Push to PostgreSQL: If you have a SQLite database open and want to copy its data to a PostgreSQL server, click the "Push to PostgreSQL" button in the toolbar. This opens the same connection dialog. After connecting, all events from the SQLite database are copied to the PostgreSQL server. Progress is reported in a dialog. The SQLite database remains open afterward so you can continue working locally.
 
 Switching back: To return to working with local SQLite databases, close the current database (File > Close Database or Ctrl+W) and open or import as usual.`
+  },
+  {
+    id: 'open-problems',
+    title: 'When a Database Will Not Open',
+    content: `If a database cannot be opened, any database you already had open stays open, with its tabs and filters as they were. After a successful open, the tab bar starts again from All Events and the new database's saved tabs are offered.
+
+Database Is Read-Only: A database created by an older version of 4n6time needs a one-time upgrade the first time this version opens it. If the file is on read-only storage (a write-protected drive, or a read-only file or folder), the upgrade cannot be written, and this dialog explains that. Copy the database file to a writable location and open the copy. The original file is not changed. A database that is already up to date opens normally from read-only storage.
+
+Database Not Opened: For any other failure, this dialog shows the file, a plain explanation, the raw error, and which database (if any) is still open. Common explanations: "This file isn't a 4n6time database." for a file that is not a 4n6time database at all, and "The database file could not be opened." with a note to check that it exists and that you can read it. The status bar also shows the error.
+
+PostgreSQL connection failures are shown inside the connection dialog instead, so you can correct the settings there. See PostgreSQL Support.`
   },
   {
     id: 'pagination',
@@ -325,13 +355,22 @@ Page input: The page number between Prev and Next is an editable field. Type a p
 The total event count matching your current filters and search is displayed to the right of the pagination controls.`
   },
   {
+    id: 'recount',
+    title: 'Event Count and Recount Events',
+    content: `The total number of events in a database is stored in the database and kept up to date by every import and push, so opening a large database or showing all events does not have to count every row. Totals for filtered views, searches, and examiner notes are always counted live.
+
+Recount Events: Tools > Recount Events counts every event in the database and stores the result as the new total. A dialog shows the total (examiner notes are not included), and the header and the grid's total update to match. The old and new values are written to the log.
+
+When to use it: Only if a total ever looks wrong, for example if the number of events shown with no filters does not match what you expect after imports from more than one computer into the same PostgreSQL database at the same moment. Recounting a very large PostgreSQL database can take a while.`
+  },
+  {
     id: 'logging',
     title: 'Logging',
     content: `4n6time includes a logging system for troubleshooting. Access it from Help > Logging.
 
 Enabling logging: Click "Enable Logging" in the Logging dialog. You will be prompted to choose a location and filename for the log file. Once enabled, the dialog shows the log file path and a green "Enabled" badge.
 
-What gets logged: Application startup and shutdown, database open and close events, import operations (start, duration, event count), push to PostgreSQL operations, query errors, export CSV operations, PostgreSQL connection events, and logging enable/disable events. Each entry includes a timestamp and level (INFO or ERROR).
+What gets logged: Application startup and shutdown, database open and close events, import operations (start, duration, event count), push to PostgreSQL operations, query errors, export CSV operations, PostgreSQL connection events, and logging enable/disable events. Each entry includes a timestamp and level (INFO, WARN, or ERROR). Import failures are logged at ERROR with the file name and import ID, and a database not opened because it is on read-only storage is logged at WARN.
 
 Disabling logging: Click "Disable Logging" to stop writing to the log file. The file is closed and can be reviewed with any text editor.
 
