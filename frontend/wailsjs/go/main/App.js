@@ -22,6 +22,10 @@ export function BulkUpdateColor(arg1, arg2) {
   return window['go']['main']['App']['BulkUpdateColor'](arg1, arg2);
 }
 
+export function CancelPostgresConnect() {
+  return window['go']['main']['App']['CancelPostgresConnect']();
+}
+
 export function CheckPushTargetOffset(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['CheckPushTargetOffset'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

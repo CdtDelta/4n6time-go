@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
+	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/jackc/pgx/v5/pgconn"
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -30,6 +32,8 @@ const (
 	openMsgNoPGSchema   = "This PostgreSQL database has no 4n6time schema. Use Create & Connect to create one."
 	openMsgPermission   = "The PostgreSQL user does not have permission to use this database."
 	openMsgGeneric      = "The database could not be opened."
+	// openMsgTimeoutFmt takes the connect timeout in effect (timeoutText).
+	openMsgTimeoutFmt = "Could not reach the PostgreSQL server (no response after %s)."
 )
 
 // OpenFailure describes an open, connect, or create that failed for any
@@ -90,6 +94,12 @@ func (a *App) recordOpenFailure(backend, action, target string, err error) {
 // typed errors first (PostgreSQL SQLSTATE codes, SQLite result codes, network
 // errors), then known text, and falls back to openMsgGeneric.
 func openFailureMessage(err error) string {
+	// Before the network checks: a timeout is also a net.Error.
+	var timeoutErr *database.ConnectTimeoutError
+	if errors.As(err, &timeoutErr) {
+		return fmt.Sprintf(openMsgTimeoutFmt, timeoutText(timeoutErr.Timeout))
+	}
+
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
@@ -138,4 +148,16 @@ func openFailureMessage(err error) string {
 		return openMsgUnreachable
 	}
 	return openMsgGeneric
+}
+
+// timeoutText writes a connect timeout as "10 seconds" or "1 second", or in
+// Go duration form when it is not whole seconds.
+func timeoutText(d time.Duration) string {
+	if d%time.Second != 0 {
+		return d.String()
+	}
+	if n := int(d / time.Second); n != 1 {
+		return fmt.Sprintf("%d seconds", n)
+	}
+	return "1 second"
 }

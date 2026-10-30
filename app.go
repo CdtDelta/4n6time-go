@@ -49,6 +49,14 @@ type App struct {
 	// lastOpenFailure is set when the most recent open, connect, or create
 	// failed for any other reason (GetOpenFailure).
 	lastOpenFailure *OpenFailure
+
+	// One in-flight request per kind; starting one cancels the previous
+	// (request_slots.go). gridReq covers QueryEvents and AdvancedSearch (page
+	// and counts), histReq covers GetTimelineHistogram, and connectReq covers
+	// ConnectPostgres and CreatePostgresDatabase (CancelPostgresConnect).
+	gridReq    requestSlot
+	histReq    requestSlot
+	connectReq requestSlot
 }
 
 // NewApp creates a new App instance.
@@ -624,11 +632,16 @@ func buildSimpleQuery(req QueryRequest, d query.QueryDialect, pageSize int) (*qu
 // one WHERE. Counting the two halves separately keeps the evidence count on a
 // covering index where one applies; a count over the UNION would lose it.
 func (a *App) countCombined(evidenceSQL string, evidenceArgs []interface{}, notesSQL string, notesArgs []interface{}) (int64, error) {
-	evidence, err := a.store.ExecuteCountQuery(evidenceSQL, evidenceArgs)
+	return a.countCombinedContext(context.Background(), evidenceSQL, evidenceArgs, notesSQL, notesArgs)
+}
+
+// countCombinedContext is countCombined under ctx.
+func (a *App) countCombinedContext(ctx context.Context, evidenceSQL string, evidenceArgs []interface{}, notesSQL string, notesArgs []interface{}) (int64, error) {
+	evidence, err := a.store.ExecuteCountQueryContext(ctx, evidenceSQL, evidenceArgs)
 	if err != nil {
 		return 0, fmt.Errorf("counting evidence: %w", err)
 	}
-	notes, err := a.store.ExecuteCountQuery(notesSQL, notesArgs)
+	notes, err := a.store.ExecuteCountQueryContext(ctx, notesSQL, notesArgs)
 	if err != nil {
 		return 0, fmt.Errorf("counting examiner notes: %w", err)
 	}
@@ -639,11 +652,17 @@ func (a *App) countCombined(evidenceSQL string, evidenceArgs []interface{}, note
 // count comes from the cache (evidenceCount) instead of counting
 // log2timeline, and the notes count stays live.
 func (a *App) countUnfiltered(notesSQL string, notesArgs []interface{}) (int64, error) {
+	return a.countUnfilteredContext(context.Background(), notesSQL, notesArgs)
+}
+
+// countUnfilteredContext is countUnfiltered under ctx. The cached evidence
+// read is one row and runs without it.
+func (a *App) countUnfilteredContext(ctx context.Context, notesSQL string, notesArgs []interface{}) (int64, error) {
 	evidence, err := a.evidenceCount()
 	if err != nil {
 		return 0, fmt.Errorf("counting evidence: %w", err)
 	}
-	notes, err := a.store.ExecuteCountQuery(notesSQL, notesArgs)
+	notes, err := a.store.ExecuteCountQueryContext(ctx, notesSQL, notesArgs)
 	if err != nil {
 		return 0, fmt.Errorf("counting examiner notes: %w", err)
 	}
@@ -685,10 +704,15 @@ type QueryResponse struct {
 	PageSize   int            `json:"pageSize"`
 }
 
+// QueryEvents returns one grid page and the total. It takes the grid request
+// slot: a newer QueryEvents or AdvancedSearch cancels it, and it then returns
+// errSuperseded.
 func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
+	ctx, done := a.gridReq.begin()
+	defer done()
 
 	pageSize := req.PageSize
 	if pageSize <= 0 {
@@ -716,17 +740,23 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	// With no WHERE at all, the evidence half comes from the cached event count.
 	var totalCount int64
 	if where, _ := q.BuildWhere(); where == "" {
-		totalCount, err = a.countUnfiltered(notesCountSQL, notesCountArgs)
+		totalCount, err = a.countUnfilteredContext(ctx, notesCountSQL, notesCountArgs)
 	} else {
-		totalCount, err = a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
+		totalCount, err = a.countCombinedContext(ctx, countSQL, countArgs, notesCountSQL, notesCountArgs)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errSuperseded
+		}
 		a.logError("Query count error: " + err.Error())
 		totalCount = 0
 	}
 
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQueryContext(ctx, sqlStr, args)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errSuperseded
+		}
 		a.logError("Query error: " + err.Error())
 		return nil, fmt.Errorf("querying events: %w", err)
 	}
@@ -740,11 +770,14 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 }
 
 // AdvancedSearch executes a raw WHERE clause query with pagination.
-// Returns the same result format as QueryEvents.
+// Returns the same result format as QueryEvents, and shares its grid request
+// slot.
 func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResponse, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
+	ctx, done := a.gridReq.begin()
+	defer done()
 	if pageSize <= 0 {
 		pageSize = 1000
 	}
@@ -760,14 +793,20 @@ func (a *App) AdvancedSearch(whereClause string, page, pageSize int) (*QueryResp
 	countSQL, countArgs := rq.BuildCount()
 	notesCountSQL, notesCountArgs := rq.BuildNotesCount()
 
-	totalCount, err := a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
+	totalCount, err := a.countCombinedContext(ctx, countSQL, countArgs, notesCountSQL, notesCountArgs)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errSuperseded
+		}
 		a.logError("Advanced search count error: " + err.Error())
 		return nil, fmt.Errorf("count query error: %w", err)
 	}
 
-	events, err := a.store.ExecuteQuery(sqlStr, args)
+	events, err := a.store.ExecuteQueryContext(ctx, sqlStr, args)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errSuperseded
+		}
 		a.logError("Advanced search error: " + err.Error())
 		return nil, fmt.Errorf("query error: %w", err)
 	}
@@ -860,40 +899,54 @@ func splitIDs(ids []int64) (regular, examiner []int64) {
 }
 
 // BulkUpdateColor applies a color to multiple events. Positive IDs update
-// log2timeline; negative IDs update examiner_notes.
-func (a *App) BulkUpdateColor(ids []int64, color string) error {
+// log2timeline; negative IDs update examiner_notes. It returns each updated
+// row's grid ID (negative for notes), tag, and color, so the frontend can
+// patch the rows without reloading the page.
+func (a *App) BulkUpdateColor(ids []int64, color string) ([]database.BulkEditRow, error) {
 	if a.store == nil {
-		return fmt.Errorf("no database open")
+		return nil, fmt.Errorf("no database open")
 	}
 	regular, examiner := splitIDs(ids)
+	var updated []database.BulkEditRow
 	if len(regular) > 0 {
-		if err := a.store.BulkUpdateColor(regular, color); err != nil {
-			return fmt.Errorf("bulk update color: %w", err)
+		rows, err := a.store.BulkUpdateColor(regular, color)
+		if err != nil {
+			return nil, fmt.Errorf("bulk update color: %w", err)
 		}
+		updated = append(updated, rows...)
 	}
 	if len(examiner) > 0 {
-		if err := a.store.BulkUpdateExaminerNoteColor(examiner, color); err != nil {
-			return fmt.Errorf("bulk update examiner note color: %w", err)
+		rows, err := a.store.BulkUpdateExaminerNoteColor(examiner, color)
+		if err != nil {
+			return nil, fmt.Errorf("bulk update examiner note color: %w", err)
+		}
+		for _, r := range rows {
+			r.ID = -r.ID
+			updated = append(updated, r)
 		}
 	}
 	a.logInfo(fmt.Sprintf("Bulk color update: %d events, %d examiner notes, color=%s", len(regular), len(examiner), color))
-	return nil
+	return updated, nil
 }
 
 // BulkAddTag appends a tag to multiple events. Only positive IDs (regular events)
-// are updated; examiner note tags are immutable.
-func (a *App) BulkAddTag(ids []int64, tag string) error {
+// are updated; examiner note tags are immutable. It returns each updated
+// row's ID, tag, and color; notes are never among them.
+func (a *App) BulkAddTag(ids []int64, tag string) ([]database.BulkEditRow, error) {
 	if a.store == nil {
-		return fmt.Errorf("no database open")
+		return nil, fmt.Errorf("no database open")
 	}
 	regular, _ := splitIDs(ids)
+	var updated []database.BulkEditRow
 	if len(regular) > 0 {
-		if err := a.store.BulkAddTag(regular, tag); err != nil {
-			return fmt.Errorf("bulk add tag: %w", err)
+		rows, err := a.store.BulkAddTag(regular, tag)
+		if err != nil {
+			return nil, fmt.Errorf("bulk add tag: %w", err)
 		}
+		updated = rows
 	}
 	a.logInfo(fmt.Sprintf("Bulk tag add: %d events, tag=%s", len(regular), tag))
-	return nil
+	return updated, nil
 }
 
 // BulkSetBookmark sets the bookmark value on multiple events. Positive IDs update
@@ -1163,6 +1216,9 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("no database open")
 	}
+	// A newer histogram request cancels this one (errSuperseded).
+	ctx, done := a.histReq.begin()
+	defer done()
 
 	var where string
 	var whereArgs []interface{}
@@ -1200,9 +1256,9 @@ func (a *App) GetTimelineHistogram(req QueryRequest) ([]TimelineBucket, error) {
 	}
 
 	// The store runs the same WHERE over evidence and over the projected notes.
-	dbBuckets, err := a.store.GetTimelineHistogram(whereClause, whereArgs, window)
+	dbBuckets, err := a.store.GetTimelineHistogramContext(ctx, whereClause, whereArgs, window)
 	if err != nil {
-		return nil, err
+		return nil, supersededOr(ctx, err)
 	}
 
 	// Convert from database.TimelineBucket to main.TimelineBucket
@@ -1386,17 +1442,36 @@ func (a *App) ConnectPostgres(host, port, dbName, user, password, sslMode string
 	connStr := u.String()
 
 	// Open the new store first; the current database stays open if this fails.
+	// CancelPostgresConnect cancels the attempt through ctx.
+	ctx, done := a.connectReq.begin()
+	defer done()
 	a.setOpenFailure(nil)
-	store, err := database.OpenStore("postgres", connStr)
+	store, err := database.OpenStoreContext(ctx, "postgres", connStr)
 	if err != nil {
+		if ctx.Err() != nil {
+			a.logInfo("PostgreSQL connect cancelled: " + database.MaskConnStr(connStr))
+			return nil, nil
+		}
 		wrapped := fmt.Errorf("connecting to PostgreSQL: %w", err)
 		a.recordOpenFailure("postgres", openActionConnect, database.MaskConnStr(connStr), wrapped)
 		return nil, wrapped
+	}
+	if ctx.Err() != nil {
+		store.Close()
+		a.logInfo("PostgreSQL connect cancelled: " + database.MaskConnStr(connStr))
+		return nil, nil
 	}
 
 	a.switchStore(store, "postgres")
 	a.logInfo("Connected to PostgreSQL: " + database.MaskConnStr(connStr))
 	return a.getDBInfo()
+}
+
+// CancelPostgresConnect cancels a ConnectPostgres or CreatePostgresDatabase
+// in progress. The cancelled call returns nil, nil: no store switch, the
+// current database (if any) stays open, and no failure is recorded.
+func (a *App) CancelPostgresConnect() {
+	a.connectReq.cancelCurrent()
 }
 
 // CreatePostgresDatabase creates the 4n6time schema on a PostgreSQL database and connects to it.
@@ -1421,12 +1496,25 @@ func (a *App) CreatePostgresDatabase(host, port, dbName, user, password, sslMode
 	connStr := u.String()
 
 	// Open the new store first; the current database stays open if this fails.
+	// CancelPostgresConnect cancels the attempt through ctx; the schema
+	// transaction rolls back.
+	ctx, done := a.connectReq.begin()
+	defer done()
 	a.setOpenFailure(nil)
-	store, err := database.CreateStore("postgres", connStr, nil)
+	store, err := database.CreateStoreContext(ctx, "postgres", connStr, nil)
 	if err != nil {
+		if ctx.Err() != nil {
+			a.logInfo("PostgreSQL create cancelled: " + database.MaskConnStr(connStr))
+			return nil, nil
+		}
 		wrapped := fmt.Errorf("creating PostgreSQL schema: %w", err)
 		a.recordOpenFailure("postgres", openActionCreate, database.MaskConnStr(connStr), wrapped)
 		return nil, wrapped
+	}
+	if ctx.Err() != nil {
+		store.Close()
+		a.logInfo("PostgreSQL create cancelled: " + database.MaskConnStr(connStr))
+		return nil, nil
 	}
 
 	a.switchStore(store, "postgres")

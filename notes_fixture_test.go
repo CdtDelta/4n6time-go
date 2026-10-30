@@ -115,7 +115,7 @@ func mxBuildFixture(t *testing.T, app *App) mxIDs {
 		// The store returns note IDs already negated (InsertExaminerNote returns -id),
 		// so id is passed to the bulk calls unchanged.
 		if n.color != "" {
-			if err := app.BulkUpdateColor([]int64{id}, n.color); err != nil {
+			if _, err := app.BulkUpdateColor([]int64{id}, n.color); err != nil {
 				t.Fatalf("fixture: coloring note %s: %v", n.key, err)
 			}
 		}

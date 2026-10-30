@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 )
@@ -85,14 +86,15 @@ func UpgradePostgresOffset(connStr string) error {
 	return pgUpgradeOffset(conn)
 }
 
-// openPostgresConn opens and pings a plain connection with no schema work.
+// openPostgresConn opens and pings a plain connection with no schema work,
+// with the same connect timeout as a store (openPGDB).
 func openPostgresConn(connStr string) (*sql.DB, error) {
 	d := &PostgresDialect{}
-	conn, err := sql.Open(d.DriverName(), d.DSN(connStr))
+	conn, timeout, err := openPGDB(d.DSN(connStr))
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, err
 	}
-	if err := conn.Ping(); err != nil {
+	if err := pgPing(context.Background(), conn, timeout); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -55,14 +56,23 @@ type PostgresStore struct {
 
 // OpenPostgres opens an existing 4n6time PostgreSQL database.
 func OpenPostgres(connStr string) (*PostgresStore, error) {
+	return OpenPostgresContext(context.Background(), connStr)
+}
+
+// OpenPostgresContext is OpenPostgres with a context that can cancel the
+// attempt. Cancelling interrupts the connect; the migration runs without the
+// context, so a cancel during it takes effect when it finishes, and the store
+// is closed instead of returned. A cancelled attempt returns an error wrapping
+// ctx.Err(). A connect timeout returns an error wrapping *ConnectTimeoutError.
+func OpenPostgresContext(ctx context.Context, connStr string) (*PostgresStore, error) {
 	d := &PostgresDialect{}
 
-	conn, err := sql.Open(d.DriverName(), d.DSN(connStr))
+	conn, timeout, err := openPGDB(d.DSN(connStr))
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, err
 	}
 
-	if err := conn.Ping(); err != nil {
+	if err := pgPing(ctx, conn, timeout); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
@@ -74,6 +84,10 @@ func OpenPostgres(connStr string) (*PostgresStore, error) {
 		conn.Close()
 		return nil, fmt.Errorf("migrating database: %w", err)
 	}
+	if ctx.Err() != nil {
+		conn.Close()
+		return nil, fmt.Errorf("connecting to database: %w", ctx.Err())
+	}
 
 	return db, nil
 }
@@ -81,17 +95,31 @@ func OpenPostgres(connStr string) (*PostgresStore, error) {
 // CreatePostgres creates a new 4n6time schema on a PostgreSQL database.
 // The database itself must already exist; this creates the tables and indexes.
 func CreatePostgres(connStr string, indexFields []string) (*PostgresStore, error) {
+	return CreatePostgresContext(context.Background(), connStr, indexFields)
+}
+
+// CreatePostgresContext is CreatePostgres with a context that can cancel the
+// attempt, during the connect or the schema transaction (which rolls back).
+func CreatePostgresContext(ctx context.Context, connStr string, indexFields []string) (*PostgresStore, error) {
 	d := &PostgresDialect{}
 
-	conn, err := sql.Open(d.DriverName(), d.DSN(connStr))
+	conn, timeout, err := openPGDB(d.DSN(connStr))
 	if err != nil {
 		return nil, fmt.Errorf("creating database: %w", err)
 	}
 
+	if err := pgPing(ctx, conn, timeout); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("connecting to database: %w", err)
+	}
+
 	db := &PostgresStore{connStr: connStr, conn: conn, dialect: d}
 
-	if err := db.createSchema(indexFields); err != nil {
+	if err := db.createSchema(ctx, indexFields); err != nil {
 		conn.Close()
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("creating schema: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("creating schema: %w", err)
 	}
 
@@ -293,45 +321,57 @@ func (db *PostgresStore) GetExaminerNotes() ([]*model.Event, error) {
 	return notes, rows.Err()
 }
 
-// BulkUpdateColor sets the color on multiple log2timeline events in a single transaction.
-func (db *PostgresStore) BulkUpdateColor(ids []int64, color string) error {
+// pgBulkSetColor sets color on the rows of table whose id is in ids, in one
+// UPDATE ... RETURNING, and returns the rows as they now are.
+func (db *PostgresStore) pgBulkSetColor(table string, ids []int64, color string) ([]BulkEditRow, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
-	tx, err := db.conn.Begin()
+	q := "UPDATE " + table + " SET color = $1 WHERE id = ANY($2) RETURNING id, tag, color"
+	noteBulkUpdate(q)
+	rows, err := db.conn.Query(q, color, ids)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("updating color: %w", err)
 	}
-	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("UPDATE log2timeline SET color = $1 WHERE id = $2", color, id); err != nil {
-			return fmt.Errorf("updating color for event %d: %w", id, err)
-		}
-	}
-	return tx.Commit()
+	return scanBulkRows(rows)
 }
 
-// BulkAddTag appends a tag to multiple log2timeline events, avoiding duplicates.
-func (db *PostgresStore) BulkAddTag(ids []int64, tag string) error {
+// BulkUpdateColor sets the color on multiple log2timeline events in one
+// statement and returns each row's ID, tag, and color.
+func (db *PostgresStore) BulkUpdateColor(ids []int64, color string) ([]BulkEditRow, error) {
+	return db.pgBulkSetColor("log2timeline", ids, color)
+}
+
+// BulkAddTag appends a tag to multiple log2timeline events, avoiding
+// duplicates, one read and one UPDATE per row in a single transaction (see
+// SQLiteStore.BulkAddTag). It returns each row's ID, new tag, and color.
+func (db *PostgresStore) BulkAddTag(ids []int64, tag string) ([]BulkEditRow, error) {
 	if len(ids) == 0 || tag == "" {
-		return nil
+		return nil, nil
 	}
 	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	out := make([]BulkEditRow, 0, len(ids))
 	for _, id := range ids {
 		var existing sql.NullString
 		if err := tx.QueryRow("SELECT tag FROM log2timeline WHERE id = $1", id).Scan(&existing); err != nil {
-			return fmt.Errorf("reading tag for event %d: %w", id, err)
+			return nil, fmt.Errorf("reading tag for event %d: %w", id, err)
 		}
 		newTag := appendTagDedup(existing.String, tag)
-		if _, err := tx.Exec("UPDATE log2timeline SET tag = $1 WHERE id = $2", newTag, id); err != nil {
-			return fmt.Errorf("updating tag for event %d: %w", id, err)
+		q := "UPDATE log2timeline SET tag = $1 WHERE id = $2 RETURNING id, tag, color"
+		noteBulkUpdate(q)
+		var r BulkEditRow
+		var gotTag, color sql.NullString
+		if err := tx.QueryRow(q, newTag, id).Scan(&r.ID, &gotTag, &color); err != nil {
+			return nil, fmt.Errorf("updating tag for event %d: %w", id, err)
 		}
+		r.Tag, r.Color = gotTag.String, color.String
+		out = append(out, r)
 	}
-	return tx.Commit()
+	return out, tx.Commit()
 }
 
 // BulkSetBookmark sets the bookmark value on multiple log2timeline events.
@@ -352,22 +392,14 @@ func (db *PostgresStore) BulkSetBookmark(ids []int64, bookmark int64) error {
 	return tx.Commit()
 }
 
-// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes.
-func (db *PostgresStore) BulkUpdateExaminerNoteColor(ids []int64, color string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	tx, err := db.conn.Begin()
+// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes in
+// one statement and returns each note's id (positive), tag, and color.
+func (db *PostgresStore) BulkUpdateExaminerNoteColor(ids []int64, color string) ([]BulkEditRow, error) {
+	rows, err := db.pgBulkSetColor("examiner_notes", ids, color)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("examiner notes: %w", err)
 	}
-	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("UPDATE examiner_notes SET color = $1 WHERE id = $2", color, id); err != nil {
-			return fmt.Errorf("updating examiner note color for %d: %w", id, err)
-		}
-	}
-	return tx.Commit()
+	return rows, nil
 }
 
 // BulkSetExaminerNoteBookmark sets the bookmark value on multiple examiner notes.
@@ -407,13 +439,14 @@ func (db *PostgresStore) ToggleBookmark(rowid int64) (int64, error) {
 	return val, err
 }
 
-// createSchema builds all tables and indexes for a new database.
-func (db *PostgresStore) createSchema(indexFields []string) error {
+// createSchema builds all tables and indexes for a new database. Cancelling
+// ctx rolls the transaction back.
+func (db *PostgresStore) createSchema(ctx context.Context, indexFields []string) error {
 	if indexFields == nil {
 		indexFields = DefaultIndexFields
 	}
 
-	tx, err := db.conn.Begin()
+	tx, err := db.conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -921,7 +954,13 @@ func (db *PostgresStore) DeleteQuery(name string) error {
 // ...). The SQL runs as given: examiner notes appear only when it reads
 // query.CombinedSource.
 func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
-	rows, err := db.conn.Query(sqlStr, args...)
+	return db.ExecuteQueryContext(context.Background(), sqlStr, args)
+}
+
+// ExecuteQueryContext is ExecuteQuery under ctx. Cancelling ctx sends a
+// cancel request to the server (openPGDB), which stops the query there.
+func (db *PostgresStore) ExecuteQueryContext(ctx context.Context, sqlStr string, args []interface{}) ([]*model.Event, error) {
+	rows, err := db.conn.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -931,8 +970,13 @@ func (db *PostgresStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*mod
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
 func (db *PostgresStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
+	return db.ExecuteCountQueryContext(context.Background(), sqlStr, args)
+}
+
+// ExecuteCountQueryContext is ExecuteCountQuery under ctx.
+func (db *PostgresStore) ExecuteCountQueryContext(ctx context.Context, sqlStr string, args []interface{}) (int64, error) {
 	var count int64
-	if err := db.conn.QueryRow(sqlStr, args...).Scan(&count); err != nil {
+	if err := db.conn.QueryRowContext(ctx, sqlStr, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}
 	return count, nil
@@ -948,7 +992,12 @@ const pgHistogramRange = "COALESCE(to_char(MIN(datetime), 'YYYY-MM-DD HH24:MI:SS
 // non-empty and applies to both halves; whereArgs are its parameter values.
 // window, when set, is an explicit range (see runHistogram).
 func (db *PostgresStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
-	return runHistogram(db.conn, db.dialect, pgHistogramRange, whereClause, whereArgs, window)
+	return db.GetTimelineHistogramContext(context.Background(), whereClause, whereArgs, window)
+}
+
+// GetTimelineHistogramContext is GetTimelineHistogram under ctx.
+func (db *PostgresStore) GetTimelineHistogramContext(ctx context.Context, whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
+	return runHistogram(ctx, db.conn, db.dialect, pgHistogramRange, whereClause, whereArgs, window)
 }
 
 // pgScanEvents converts sql.Rows into a slice of Event pointers using

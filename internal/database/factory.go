@@ -1,6 +1,9 @@
 package database
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // OpenStore opens an existing database using the specified driver.
 // For SQLite, pathOrConnStr is the file path to the .db file.
@@ -29,4 +32,23 @@ func CreateStore(driver, pathOrConnStr string, indexFields []string) (Store, err
 	default:
 		return nil, fmt.Errorf("unsupported driver: %s", driver)
 	}
+}
+
+// OpenStoreContext is OpenStore with a context that can cancel a PostgreSQL
+// connection attempt (see OpenPostgresContext). SQLite opens a local file and
+// does not use it.
+func OpenStoreContext(ctx context.Context, driver, pathOrConnStr string) (Store, error) {
+	if driver == "postgres" {
+		return OpenPostgresContext(ctx, pathOrConnStr)
+	}
+	return OpenStore(driver, pathOrConnStr)
+}
+
+// CreateStoreContext is CreateStore with a context that can cancel a
+// PostgreSQL connection attempt or schema creation (see CreatePostgresContext).
+func CreateStoreContext(ctx context.Context, driver, pathOrConnStr string, indexFields []string) (Store, error) {
+	if driver == "postgres" {
+		return CreatePostgresContext(ctx, pathOrConnStr, indexFields)
+	}
+	return CreateStore(driver, pathOrConnStr, indexFields)
 }

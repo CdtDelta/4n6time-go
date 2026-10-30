@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cdtdelta/4n6time/internal/database"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -208,6 +210,10 @@ func TestOpenFailureMessage(t *testing.T) {
 		{"no such database", wrap(&pgconn.PgError{Code: "3D000"}), openMsgNoPGDatabase},
 		{"no schema", wrap(&pgconn.PgError{Code: "42P01"}), openMsgNoPGSchema},
 		{"no privilege", wrap(&pgconn.PgError{Code: "42501"}), openMsgPermission},
+		{"timeout", wrap(&database.ConnectTimeoutError{Timeout: 10 * time.Second, Err: &net.OpError{Op: "dial", Err: errors.New("i/o timeout")}}),
+			"Could not reach the PostgreSQL server (no response after 10 seconds)."},
+		{"timeout fractional", wrap(&database.ConnectTimeoutError{Timeout: 1500 * time.Millisecond, Err: errors.New("timeout")}),
+			"Could not reach the PostgreSQL server (no response after 1.5s)."},
 		{"refused", wrap(&net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")}), openMsgUnreachable},
 		{"no host", wrap(&net.DNSError{Err: "no such host", Name: "nohost"}), openMsgUnreachable},
 		{"refused text", errors.New("dial tcp 127.0.0.1:1: connect: connection refused"), openMsgUnreachable},

@@ -1,6 +1,10 @@
 package database
 
-import "github.com/cdtdelta/4n6time/internal/model"
+import (
+	"context"
+
+	"github.com/cdtdelta/4n6time/internal/model"
+)
 
 // TimelineBucket is one histogram bucket: its timestamp label, the evidence
 // count, and the examiner notes count. The two counts are never summed.
@@ -8,6 +12,14 @@ type TimelineBucket struct {
 	Timestamp  string `json:"timestamp"`
 	Count      int64  `json:"count"`
 	NotesCount int64  `json:"notesCount"`
+}
+
+// BulkEditRow is one row changed by a bulk color or tag edit, with its tag
+// and color after the edit.
+type BulkEditRow struct {
+	ID    int64  `json:"id"`
+	Tag   string `json:"tag"`
+	Color string `json:"color"`
 }
 
 // HistogramWindow is an explicit histogram range, as "YYYY-MM-DD HH:MM:SS"
@@ -35,6 +47,12 @@ type Store interface {
 	// log2timeline only, and BuildCombined reads evidence UNION ALL notes.
 	ExecuteQuery(sql string, args []interface{}) ([]*model.Event, error)
 	ExecuteCountQuery(sql string, args []interface{}) (int64, error)
+	// The Context variants run under ctx, so a superseded grid load or count
+	// stops when ctx is cancelled: SQLite interrupts the statement, and
+	// PostgreSQL sends a cancel request to the server. A cancelled call
+	// returns an error and the caller checks ctx.Err().
+	ExecuteQueryContext(ctx context.Context, sql string, args []interface{}) ([]*model.Event, error)
+	ExecuteCountQueryContext(ctx context.Context, sql string, args []interface{}) (int64, error)
 
 	// Metadata and filters
 	GetDistinctValues(field string) (map[string]int64, error)
@@ -48,6 +66,7 @@ type Store interface {
 	GetMinMaxDate() (string, string, error)
 	GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (string, string, error)
 	GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error)
+	GetTimelineHistogramContext(ctx context.Context, whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error)
 
 	// Saved queries
 	GetSavedQueries() ([]SavedQuery, error)
@@ -61,11 +80,13 @@ type Store interface {
 	ToggleExaminerNoteBookmark(id int64) (int64, error)
 	GetExaminerNotes() ([]*model.Event, error)
 
-	// Bulk operations
-	BulkUpdateColor(ids []int64, color string) error
-	BulkAddTag(ids []int64, tag string) error
+	// Bulk operations. The color and tag edits return each updated row's ID,
+	// tag, and color after the edit, so the grid can patch the rows in place.
+	// Examiner note IDs are the positive examiner_notes ids.
+	BulkUpdateColor(ids []int64, color string) ([]BulkEditRow, error)
+	BulkAddTag(ids []int64, tag string) ([]BulkEditRow, error)
 	BulkSetBookmark(ids []int64, bookmark int64) error
-	BulkUpdateExaminerNoteColor(ids []int64, color string) error
+	BulkUpdateExaminerNoteColor(ids []int64, color string) ([]BulkEditRow, error)
 	BulkSetExaminerNoteBookmark(ids []int64, bookmark int64) error
 
 	// Tab session persistence

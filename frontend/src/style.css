@@ -2001,10 +2001,62 @@ html, body, #root {
   box-sizing: border-box;
 }
 
+/* The native select ignores the theme background in WebKitGTK and draws
+   white; drawn like .filter-row select instead, with a themed arrow and
+   themed options. */
+.pg-field select {
+  -webkit-appearance: none;
+  appearance: none;
+  color-scheme: var(--color-scheme, dark);
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23808080'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 8px 5px;
+}
+
+.pg-field select option {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
 .pg-field input:focus,
 .pg-field select:focus {
   outline: none;
   border-color: var(--border-accent);
+}
+
+/* Reset sits under SSL Mode as a small right-aligned text link. Theme text
+   colors keep it readable in light and dark themes alike. */
+.pg-reset-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -4px 0 10px;
+}
+
+.pg-reset {
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.pg-reset:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.pg-reset:focus-visible {
+  outline: 1px solid var(--border-accent);
+  outline-offset: 2px;
+}
+
+.pg-reset:disabled {
+  color: var(--text-dim);
+  text-decoration: none;
+  cursor: not-allowed;
 }
 
 .pg-error {
@@ -2016,14 +2068,29 @@ html, body, #root {
   border-radius: 4px;
 }
 
+/* Raw error text under the plain-language connect failure message. */
+.pg-error-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Buttons share the row and wrap to a second line rather than overflow the
+   dialog. nowrap keeps each label on one line, and the default min-width
+   (the label's width) stops a button shrinking below it, so a wide theme
+   font wraps whole buttons, never words. */
 .pg-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 14px;
 }
 
 .pg-actions button {
-  flex: 1;
+  flex: 1 1 auto;
+  white-space: nowrap;
   padding: 8px 12px;
   background: var(--bg-accent);
   color: var(--text-primary);

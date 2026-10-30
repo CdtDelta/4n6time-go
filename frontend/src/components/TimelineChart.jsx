@@ -4,6 +4,7 @@ import {
   Brush, CartesianGrid, ReferenceArea,
 } from 'recharts'
 import { GetTimelineHistogram } from '../../wailsjs/go/main/App'
+import { isSuperseded } from '../requestErrors'
 import themes from '../themes'
 
 const ADVANCED_MODE_TIP = 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
@@ -55,6 +56,9 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
   // position in chart coordinates. The lane sits outside the plot area, where
   // the Recharts tooltip does not fire, so it has its own tooltip.
   const [laneHover, setLaneHover] = useState(null)
+  // Sequence number of the latest histogram load; older loads drop their
+  // results. The backend also cancels the superseded query.
+  const loadSeqRef = useRef(0)
 
   // Load histogram data when visible, filters change, or db changes.
   // histogramSuppressRef suppresses the fetch during user-initiated tab switches; histogramVersion
@@ -65,6 +69,8 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
     if (histogramSuppressRef?.current) return
 
     let cancelled = false
+    const seq = ++loadSeqRef.current
+    const isCurrent = () => !cancelled && seq === loadSeqRef.current
     setLoading(true)
 
     async function loadData() {
@@ -91,7 +97,7 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
         }
 
         const result = await GetTimelineHistogram(req)
-        if (!cancelled && result) {
+        if (isCurrent() && result) {
           setData(result.map(b => ({
             timestamp: b.timestamp,
             count: b.count,
@@ -102,9 +108,9 @@ function TimelineChart({ visible, filters, dbInfo, onSelectRange, theme, activeS
           setLaneHover(null)
         }
       } catch (err) {
-        console.error('Error loading histogram:', err)
+        if (isCurrent() && !isSuperseded(err)) console.error('Error loading histogram:', err)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (isCurrent()) setLoading(false)
       }
     }
 

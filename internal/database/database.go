@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -777,45 +778,55 @@ func (db *SQLiteStore) GetExaminerNotes() ([]*model.Event, error) {
 	return notes, rows.Err()
 }
 
-// BulkUpdateColor sets the color on multiple log2timeline events in a single transaction.
-func (db *SQLiteStore) BulkUpdateColor(ids []int64, color string) error {
+// BulkUpdateColor sets the color on multiple log2timeline events in a single
+// transaction: one UPDATE per sqliteBulkChunk IDs, then a SELECT of the
+// updated rows. It returns each row's ID, tag, and color.
+func (db *SQLiteStore) BulkUpdateColor(ids []int64, color string) ([]BulkEditRow, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("UPDATE log2timeline SET color = ? WHERE rowid = ?", color, id); err != nil {
-			return fmt.Errorf("updating color for event %d: %w", id, err)
-		}
+	rows, err := sqliteBulkSetColor(tx, "log2timeline", "rowid", ids, color)
+	if err != nil {
+		return nil, err
 	}
-	return tx.Commit()
+	return rows, tx.Commit()
 }
 
-// BulkAddTag appends a tag to multiple log2timeline events, avoiding duplicates.
-func (db *SQLiteStore) BulkAddTag(ids []int64, tag string) error {
+// BulkAddTag appends a tag to multiple log2timeline events, avoiding
+// duplicates. It stays one read and one UPDATE per row in a single
+// transaction: appendTagDedup trims each existing tag and compares with
+// Unicode case folding, which SQL cannot match on both backends. It returns
+// each row's ID, new tag, and color.
+func (db *SQLiteStore) BulkAddTag(ids []int64, tag string) ([]BulkEditRow, error) {
 	if len(ids) == 0 || tag == "" {
-		return nil
+		return nil, nil
 	}
 	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
+	out := make([]BulkEditRow, 0, len(ids))
 	for _, id := range ids {
 		var existing string
-		if err := tx.QueryRow("SELECT tag FROM log2timeline WHERE rowid = ?", id).Scan(&existing); err != nil {
-			return fmt.Errorf("reading tag for event %d: %w", id, err)
+		var color sql.NullString
+		if err := tx.QueryRow("SELECT tag, color FROM log2timeline WHERE rowid = ?", id).Scan(&existing, &color); err != nil {
+			return nil, fmt.Errorf("reading tag for event %d: %w", id, err)
 		}
 		newTag := appendTagDedup(existing, tag)
-		if _, err := tx.Exec("UPDATE log2timeline SET tag = ? WHERE rowid = ?", newTag, id); err != nil {
-			return fmt.Errorf("updating tag for event %d: %w", id, err)
+		q := "UPDATE log2timeline SET tag = ? WHERE rowid = ?"
+		noteBulkUpdate(q)
+		if _, err := tx.Exec(q, newTag, id); err != nil {
+			return nil, fmt.Errorf("updating tag for event %d: %w", id, err)
 		}
+		out = append(out, BulkEditRow{ID: id, Tag: newTag, Color: color.String})
 	}
-	return tx.Commit()
+	return out, tx.Commit()
 }
 
 // BulkSetBookmark sets the bookmark value on multiple log2timeline events.
@@ -836,22 +847,23 @@ func (db *SQLiteStore) BulkSetBookmark(ids []int64, bookmark int64) error {
 	return tx.Commit()
 }
 
-// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes.
-func (db *SQLiteStore) BulkUpdateExaminerNoteColor(ids []int64, color string) error {
+// BulkUpdateExaminerNoteColor sets the color on multiple examiner notes, as
+// BulkUpdateColor does for events, and returns each note's id (positive),
+// tag, and color.
+func (db *SQLiteStore) BulkUpdateExaminerNoteColor(ids []int64, color string) ([]BulkEditRow, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	tx, err := db.conn.Begin()
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback()
-	for _, id := range ids {
-		if _, err := tx.Exec("UPDATE examiner_notes SET color = ? WHERE id = ?", color, id); err != nil {
-			return fmt.Errorf("updating examiner note color for %d: %w", id, err)
-		}
+	rows, err := sqliteBulkSetColor(tx, "examiner_notes", "id", ids, color)
+	if err != nil {
+		return nil, fmt.Errorf("examiner notes: %w", err)
 	}
-	return tx.Commit()
+	return rows, tx.Commit()
 }
 
 // BulkSetExaminerNoteBookmark sets the bookmark value on multiple examiner notes.
@@ -894,7 +906,13 @@ func appendTagDedup(existing, newTag string) string {
 // MACB, ...), distinct from QueryEvents' Pattern A order. The SQL runs as
 // given: examiner notes appear only when it reads query.CombinedSource.
 func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model.Event, error) {
-	rows, err := db.conn.Query(sqlStr, args...)
+	return db.ExecuteQueryContext(context.Background(), sqlStr, args)
+}
+
+// ExecuteQueryContext is ExecuteQuery under ctx. modernc.org/sqlite
+// interrupts the running statement (sqlite3_interrupt) when ctx is cancelled.
+func (db *SQLiteStore) ExecuteQueryContext(ctx context.Context, sqlStr string, args []interface{}) ([]*model.Event, error) {
+	rows, err := db.conn.QueryContext(ctx, sqlStr, args...)
 	if err != nil {
 		return nil, fmt.Errorf("executing query: %w", err)
 	}
@@ -904,8 +922,13 @@ func (db *SQLiteStore) ExecuteQuery(sqlStr string, args []interface{}) ([]*model
 
 // ExecuteCountQuery runs a pre-built COUNT query and returns the result.
 func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int64, error) {
+	return db.ExecuteCountQueryContext(context.Background(), sqlStr, args)
+}
+
+// ExecuteCountQueryContext is ExecuteCountQuery under ctx.
+func (db *SQLiteStore) ExecuteCountQueryContext(ctx context.Context, sqlStr string, args []interface{}) (int64, error) {
 	var count int64
-	if err := db.conn.QueryRow(sqlStr, args...).Scan(&count); err != nil {
+	if err := db.conn.QueryRowContext(ctx, sqlStr, args...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("executing count query: %w", err)
 	}
 	return count, nil
@@ -916,7 +939,12 @@ func (db *SQLiteStore) ExecuteCountQuery(sqlStr string, args []interface{}) (int
 // non-empty and applies to both halves; whereArgs are its parameter values.
 // window, when set, is an explicit range (see runHistogram).
 func (db *SQLiteStore) GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
-	return runHistogram(db.conn, db.dialect, "MIN(datetime), MAX(datetime)", whereClause, whereArgs, window)
+	return db.GetTimelineHistogramContext(context.Background(), whereClause, whereArgs, window)
+}
+
+// GetTimelineHistogramContext is GetTimelineHistogram under ctx.
+func (db *SQLiteStore) GetTimelineHistogramContext(ctx context.Context, whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
+	return runHistogram(ctx, db.conn, db.dialect, "MIN(datetime), MAX(datetime)", whereClause, whereArgs, window)
 }
 
 // scanFieldsOrderEvents scans rows in model.Fields column order (Pattern B),

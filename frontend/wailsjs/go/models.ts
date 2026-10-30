@@ -1,5 +1,21 @@
 export namespace database {
 	
+	export class BulkEditRow {
+	    id: number;
+	    tag: string;
+	    color: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BulkEditRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.tag = source["tag"];
+	        this.color = source["color"];
+	    }
+	}
 	export class SavedQuery {
 	    Name: string;
 	    Query: string;

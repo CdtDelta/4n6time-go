@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
@@ -24,7 +25,9 @@ import (
 // no evidence matches does the notes' range stand in. A note counts only when
 // its bucket falls inside the window's first and last bucket; notes outside
 // are dropped, not clamped to an edge.
-func runHistogram(conn *sql.DB, d Dialect, rangeExpr, whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
+//
+// Every query runs under ctx, so a superseded histogram stops early.
+func runHistogram(ctx context.Context, conn *sql.DB, d Dialect, rangeExpr, whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error) {
 	sources := []string{"log2timeline", query.NotesSource(d)}
 
 	var minDate, maxDate string
@@ -40,7 +43,7 @@ func runHistogram(conn *sql.DB, d Dialect, rangeExpr, whereClause string, whereA
 		if whereClause != "" {
 			rangeSQL += " " + whereClause
 		}
-		if err := conn.QueryRow(rangeSQL, whereArgs...).Scan(&lo, &hi); err != nil {
+		if err := conn.QueryRowContext(ctx, rangeSQL, whereArgs...).Scan(&lo, &hi); err != nil {
 			return nil, fmt.Errorf("getting date range: %w", err)
 		}
 		if lo.String != "" && hi.String != "" {
@@ -61,7 +64,7 @@ func runHistogram(conn *sql.DB, d Dialect, rangeExpr, whereClause string, whereA
 			histSQL += " " + whereClause
 		}
 		histSQL += " GROUP BY bucket ORDER BY bucket"
-		m, err := histogramCounts(conn, histSQL, whereArgs)
+		m, err := histogramCounts(ctx, conn, histSQL, whereArgs)
 		if err != nil {
 			return nil, err
 		}
@@ -111,8 +114,8 @@ func histogramBucketKey(dt, format string) string {
 }
 
 // histogramCounts runs one grouped bucket query and returns count by bucket.
-func histogramCounts(conn *sql.DB, histSQL string, args []interface{}) (map[string]int64, error) {
-	rows, err := conn.Query(histSQL, args...)
+func histogramCounts(ctx context.Context, conn *sql.DB, histSQL string, args []interface{}) (map[string]int64, error) {
+	rows, err := conn.QueryContext(ctx, histSQL, args...)
 	if err != nil {
 		return nil, fmt.Errorf("histogram query: %w", err)
 	}

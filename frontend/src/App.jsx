@@ -29,10 +29,15 @@ import OpenFailureDialog from './components/OpenFailureDialog'
 import RecountResultDialog from './components/RecountResultDialog'
 import OffsetUpgradeDialog from './components/OffsetUpgradeDialog'
 import themes, { lightThemes } from './themes'
+import { isSuperseded } from './requestErrors'
 
 const PAGE_SIZE = 1000
 
 const MAIN_TAB_ID = 'tab-main'
+
+// The editable bulk fields that simple-mode keyword search reads. Keep in step
+// with keywordSearchFields in app.go (it has tag, not color; a Go test checks).
+const KEYWORD_SEARCH_EDITABLE_FIELDS = ['tag']
 
 const makeTab = (id, label, baseQuery = null) => ({
   id,
@@ -247,6 +252,8 @@ function App() {
   // Continuously updated snapshot of the active tab's live state. Used when building session
   // JSON at close time, because the tab object's savedState is only written during tab switches.
   const liveTabStateRef = useRef({ page: 1, search: '', searchMode: 'simple', searchText: '', filters: null, bookmarkOnly: false })
+  // Sequence number of the latest loadPage call; older calls drop their results.
+  const loadSeqRef = useRef(0)
 
   // Pending session loaded from DB, shown in notification bar for manual restore.
   const [pendingSession, setPendingSession] = useState(null)
@@ -353,23 +360,25 @@ function App() {
   }, [])
 
   // Build the query request from current filters and active tab's base query
-  const buildQueryRequest = useCallback((page, filterState) => {
-    const bq = activeBaseQueryRef.current
+  // fresh builds the request for a database just opened: no search, filters,
+  // bookmark-only, or tab base, whatever this render's state still holds.
+  const buildQueryRequest = useCallback((page, filterState, fresh = false) => {
+    const bq = fresh ? null : activeBaseQueryRef.current
     const req = {
       filters: [],
       logic: 'AND',
       orderBy: 'datetime',
       page: page,
       pageSize: PAGE_SIZE,
-      searchText: activeSearch,
-      searchMode: searchMode,
-      bookmarkOnly: bookmarkOnly,
+      searchText: fresh ? '' : activeSearch,
+      searchMode: fresh ? 'simple' : searchMode,
+      bookmarkOnly: fresh ? false : bookmarkOnly,
       baseField: bq?.field || '',
       baseOp: bq?.op || '',
       baseValue: bq?.value || '',
     }
 
-    const fs = filterState || activeFilters
+    const fs = fresh ? filterState : (filterState || activeFilters)
     if (fs) {
       req.filters = fs.filters || []
       req.logic = fs.logic || 'AND'
@@ -385,9 +394,18 @@ function App() {
     return req
   }, [activeFilters, activeSearch, searchMode, bookmarkOnly])
 
-  const loadPage = useCallback(async (page, info, filterState) => {
+  // Every grid load gets a sequence number. A result for a superseded call is
+  // dropped, and the backend cancels the superseded query itself (it rejects
+  // with a superseded error, which is silent). fresh: see buildQueryRequest.
+  const loadPage = useCallback(async (page, info, filterState, fresh = false) => {
     const db = info || dbInfo
     if (!db) return
+
+    const seq = ++loadSeqRef.current
+    const isCurrent = () => seq === loadSeqRef.current
+    const mode = fresh ? 'simple' : searchMode
+    const search = fresh ? '' : activeSearch
+    const bookmarks = fresh ? false : bookmarkOnly
 
     setLoading(true)
     setStatus('Loading events...')
@@ -396,7 +414,7 @@ function App() {
     try {
       let result
 
-      if (searchMode === 'advanced' && activeSearch) {
+      if (mode === 'advanced' && search) {
         // Inject the active tab's base query into the raw WHERE clause
         const bq = activeBaseQueryRef.current
         let clause = activeSearch
@@ -415,10 +433,11 @@ function App() {
         }
         result = await AdvancedSearch(clause, page, PAGE_SIZE)
       } else {
-        const req = buildQueryRequest(page, filterState)
+        const req = buildQueryRequest(page, filterState, fresh)
         result = await QueryEvents(req)
       }
 
+      if (!isCurrent()) return
       if (result) {
         setEvents(result.events || [])
         setTotalCount(result.totalCount)
@@ -426,22 +445,26 @@ function App() {
 
         // An advanced clause is the whole query, so the status line does not
         // report filter panel or bookmark-only state that is not applied.
-        const advancedActive = searchMode === 'advanced' && activeSearch
-        const filterCount = advancedActive ? 0 : ((filterState || activeFilters)?.filters?.length || 0)
+        const advancedActive = mode === 'advanced' && search
+        const fs = fresh ? filterState : (filterState || activeFilters)
+        const filterCount = advancedActive ? 0 : (fs?.filters?.length || 0)
         const filterLabel = filterCount > 0 ? ` (${filterCount} filter${filterCount > 1 ? 's' : ''} active)` : ''
-        const searchLabel = activeSearch ? (searchMode === 'advanced' ? ' | Advanced: ' + activeSearch : ` | Search: "${activeSearch}"`) : ''
-        const bookmarkLabel = bookmarkOnly && !advancedActive ? ' | ★ Bookmarked only' : ''
+        const searchLabel = search ? (mode === 'advanced' ? ' | Advanced: ' + search : ` | Search: "${search}"`) : ''
+        const bookmarkLabel = bookmarks && !advancedActive ? ' | ★ Bookmarked only' : ''
         setStatus(`Showing ${result.events?.length || 0} of ${result.totalCount.toLocaleString()} events${filterLabel}${searchLabel}${bookmarkLabel}`)
       }
     } catch (err) {
-      if (searchMode === 'advanced') {
+      // A superseded call's error, or any error for a call already replaced,
+      // is not shown: the newer call reports its own result.
+      if (!isCurrent() || isSuperseded(err)) return
+      if (mode === 'advanced') {
         setSearchError(String(err))
       }
       setStatus('Error: ' + err)
     } finally {
-      setLoading(false)
+      if (isCurrent()) setLoading(false)
     }
-  }, [dbInfo, buildQueryRequest, activeFilters, searchMode, activeSearch])
+  }, [dbInfo, buildQueryRequest, activeFilters, searchMode, activeSearch, bookmarkOnly])
 
   // Apply a tab's savedState to active React state. This is the only place these setStates
   // live for tab-swap purposes. User-initiated switch callers set tabSwitchingRef.current and
@@ -488,6 +511,31 @@ function App() {
     setPendingSession(null)
   }, [])
 
+  // After a successful open, connect, or create, the previous database's tabs
+  // and per-tab state are cleared so none of its filters apply to the new
+  // database. The new database's saved session is then restored through the
+  // usual flow (auto-restore or the restore bar). A failed open never calls
+  // this. The refs are set too, so callbacks see the reset before rerender.
+  const resetTabsForNewDatabase = useCallback(() => {
+    const mainTab = makeTab(MAIN_TAB_ID, 'All Events')
+    tabsRef.current = [mainTab]
+    activeTabIdRef.current = MAIN_TAB_ID
+    activeBaseQueryRef.current = null
+    setTabs([mainTab])
+    setActiveTabId(MAIN_TAB_ID)
+    setCurrentPage(1)
+    setActiveSearch('')
+    setSearchText('')
+    setSearchMode('simple')
+    setSearchError('')
+    setBookmarkOnly(false)
+    setActiveFilters(null)
+    setShowFilters(false)
+    setSelectedEvent(null)
+    setSelectedEvents([])
+    setPendingSession(null)
+  }, [])
+
   // Shared failure handling for every database open, connect, and create
   // path. The backend opens the new database before closing the current one,
   // so after a failure the current database (if any) is still open and its UI
@@ -517,6 +565,14 @@ function App() {
     }
   }, [])
 
+  // Connect and create failures from the PostgreSQL dialog: the dialog already
+  // shows the error inline, so only the status bar message is set here, with
+  // no OpenFailureDialog on top. The backend still records the failure
+  // (GetOpenFailure). Every other open failure goes through handleOpenFailure.
+  const handleConnectDialogFailure = useCallback((err) => {
+    setStatus('Error: ' + err)
+  }, [])
+
   // Every open path (welcome screen button, toolbar Open, File > Open
   // Database) calls this. With a database open, its tab session is saved
   // first, as handleCloseDB does; if the open is cancelled or fails, that
@@ -530,12 +586,10 @@ function App() {
       setStatus('Opening database...')
       const info = await OpenDatabase()
       if (info) {
+        resetTabsForNewDatabase()
         setDbInfo(info)
-        setActiveFilters(null)
-        setShowFilters(false)
-        setSelectedEvent(null)
         setStatus(`Opened: ${info.path} (${info.eventCount.toLocaleString()} events)`)
-        await loadPage(1, info, null)
+        await loadPage(1, info, null, true)
         try {
           const sessionData = await LoadTabSession()
           if (sessionData) {
@@ -553,7 +607,7 @@ function App() {
     } catch (err) {
       await handleOpenFailure(err)
     }
-  }, [loadPage, handleRestoreTabSession, handleOpenFailure])
+  }, [loadPage, handleRestoreTabSession, handleOpenFailure, resetTabsForNewDatabase])
 
   // Tools > Recount Events: count the evidence rows live and store the total
   // as the cached event count, then show it and refresh the grid total.
@@ -574,17 +628,16 @@ function App() {
     }
   }, [loadPage, currentPage])
 
+  // Called after a successful connect or create (PostgresDialog).
   const handlePostgresConnect = useCallback(async (info) => {
     setShowPostgres(false)
+    resetTabsForNewDatabase()
     setDbInfo(info)
-    setActiveFilters(null)
-    setShowFilters(false)
-    setSelectedEvent(null)
     setStatus(`Connected: ${info.path} (${info.eventCount.toLocaleString()} events)`)
     if (info.offsetNeedsUpgrade) {
       setOffsetPrompt({ context: 'connect', run: UpgradeOffsetColumn })
     }
-    await loadPage(1, info, null)
+    await loadPage(1, info, null, true)
     try {
       const sessionData = await LoadTabSession()
       if (sessionData) {
@@ -596,7 +649,7 @@ function App() {
         }
       }
     } catch { /* session load failure is non-fatal */ }
-  }, [loadPage, handleRestoreTabSession])
+  }, [loadPage, handleRestoreTabSession, resetTabsForNewDatabase])
 
   const runPushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
     setImporting(true)
@@ -1117,26 +1170,63 @@ function App() {
     }
   }, [])
 
+  // viewDependsOn reports whether the current grid's rows or total depend on
+  // any of fields (bulk-edited 'color' or 'tag'): a tab base query on one, an
+  // advanced clause naming one, a simple keyword search when keyword search
+  // reads one, or a filter panel row on one (simple mode only; advanced mode
+  // ignores the panel). Edits that the view depends on reload the page.
+  const viewDependsOn = useCallback((fields) => {
+    const bq = activeBaseQueryRef.current
+    if (bq?.field && fields.includes(bq.field)) return true
+    if (searchMode === 'advanced' && activeSearch) {
+      return fields.some(f => new RegExp(`\\b${f}\\b`, 'i').test(activeSearch))
+    }
+    if (activeSearch && fields.some(f => KEYWORD_SEARCH_EDITABLE_FIELDS.includes(f))) return true
+    return !!activeFilters?.filters?.some(f => fields.includes(f.field))
+  }, [searchMode, activeSearch, activeFilters])
+
+  // Bulk color and tag edits return the updated rows (ID, tag, color), which
+  // are patched into the grid as handleBulkBookmark does, without reloading
+  // the page. Only when the view depends on an edited field (viewDependsOn)
+  // is the page reloaded, since rows may join or leave it.
   const handleBulkApply = useCallback(async () => {
     const color = bulkColor
     const tag = bulkTag.trim()
     if (!color && !tag) return
     const ids = selectedEvents.map(e => e.id)
     try {
+      const updated = new Map()
+      const edited = []
       if (color) {
-        await BulkUpdateColor(ids, color)
+        for (const r of (await BulkUpdateColor(ids, color)) || []) updated.set(r.id, r)
+        edited.push('color')
       }
       if (tag) {
-        await BulkAddTag(ids, tag)
+        // Runs after the color edit, so its rows carry the new color too.
+        for (const r of (await BulkAddTag(ids, tag)) || []) updated.set(r.id, r)
+        edited.push('tag')
       }
       setBulkTag('')
       setBulkColor('')
-      loadPage(currentPage)
+      if (viewDependsOn(edited)) {
+        loadPage(currentPage)
+      } else {
+        const patch = (e) => {
+          const r = updated.get(e.id)
+          return r ? { ...e, tag: r.tag, color: r.color } : e
+        }
+        setEvents(prev => prev.map(patch))
+        setSelectedEvents(prev => prev.map(patch))
+        setSelectedEvent(prev => (prev ? patch(prev) : prev))
+        setTimeout(() => { if (gridRef.current?.api) gridRef.current.api.redrawRows() }, 0)
+        setStatus(`Updated ${updated.size.toLocaleString()} ${updated.size === 1 ? 'row' : 'rows'}`)
+      }
       markOtherTabsStale()
     } catch (err) {
       console.error('Bulk apply error:', err)
+      setStatus('Bulk edit error: ' + err)
     }
-  }, [selectedEvents, bulkColor, bulkTag, loadPage, currentPage, markOtherTabsStale])
+  }, [selectedEvents, bulkColor, bulkTag, loadPage, currentPage, markOtherTabsStale, viewDependsOn])
 
   const handleBulkBookmark = useCallback(async (value) => {
     const ids = selectedEvents.map(e => e.id)
@@ -1518,7 +1608,7 @@ function App() {
       <PostgresDialog
         visible={showPostgres}
         onConnect={handlePostgresConnect}
-        onFailure={handleOpenFailure}
+        onFailure={handleConnectDialogFailure}
         onClose={() => setShowPostgres(false)}
       />
 
