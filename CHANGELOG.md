@@ -2,6 +2,18 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.19.0 (unreleased)
+
+### Performance
+
+- **The filter panel loads its dropdown values from the metadata tables instead of scanning the event table.** Source, sourcetype, type, user, and host come from the `l2t_*` tables, and Import from the import records, in one call. On a 77.5M-row PostgreSQL database, Clear Filters used to take minutes while the panel scanned every event once per field. The event table is scanned only if the metadata was never built.
+- **The filter panel no longer reloads on Apply, Clear, or histogram selection.** It reloads only when the data changes: opening or connecting to a database, an import, a push to PostgreSQL, adding or deleting an examiner note, or refreshing a tab.
+- **Filter panel values are cached per tab.** Switching back to a tab reuses its values instead of querying again. The cache is cleared whenever the data changes.
+
+### Behavior changes
+
+- **Apply no longer refills blank date fields** with the database's full date range. Clear still resets them.
+
 ## v0.18.1 (2026-10-29)
 
 ### Fixes
