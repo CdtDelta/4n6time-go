@@ -421,6 +421,8 @@ const (
 // integerFields are the log2timeline columns declared INT. Their NULLs are cast
 // to INTEGER in the notes projection so PostgreSQL types them as the evidence
 // side does; an untyped NULL in a standalone subquery would become text.
+// offset is listed for completeness, but NotesProjection casts it to the
+// dialect's OffsetSQLType instead.
 var integerFields = map[string]bool{
 	"offset": true, "store_number": true, "store_index": true,
 	"vss_store_number": true, "bookmark": true, "import_id": true,
@@ -457,6 +459,8 @@ func NotesProjection(d QueryDialect) string {
 			expr = "'" + ExaminerNoteSource + "'"
 		case "sourcetype":
 			expr = "'" + ExaminerNoteSourceType + "'"
+		case "offset":
+			expr = "CAST(NULL AS " + d.OffsetSQLType() + ")"
 		default:
 			if integerFields[f] {
 				expr = "CAST(NULL AS INTEGER)"

@@ -80,6 +80,12 @@ type Store interface {
 	RebuildIndexes(fields []string) error
 	Migrate() error
 
+	// OffsetNeedsUpgrade reports whether log2timeline.offset is a 32-bit INT
+	// (PostgreSQL databases created before v0.18.1). UpgradeOffsetColumn widens
+	// it to BIGINT. Both are no-ops on SQLite.
+	OffsetNeedsUpgrade() (bool, error)
+	UpgradeOffsetColumn() error
+
 	// Lifecycle
 	Close() error
 	Path() string

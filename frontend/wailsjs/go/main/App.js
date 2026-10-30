@@ -22,6 +22,10 @@ export function BulkUpdateColor(arg1, arg2) {
   return window['go']['main']['App']['BulkUpdateColor'](arg1, arg2);
 }
 
+export function CheckPushTargetOffset(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['CheckPushTargetOffset'](arg1, arg2, arg3, arg4, arg5, arg6);
+}
+
 export function CloseDatabase() {
   return window['go']['main']['App']['CloseDatabase']();
 }
@@ -130,6 +134,10 @@ export function LoadTabSession() {
   return window['go']['main']['App']['LoadTabSession']();
 }
 
+export function NeedsOffsetUpgrade() {
+  return window['go']['main']['App']['NeedsOffsetUpgrade']();
+}
+
 export function OpenDatabase() {
   return window['go']['main']['App']['OpenDatabase']();
 }
@@ -188,4 +196,12 @@ export function UpdateEventFields(arg1, arg2) {
 
 export function UpdateExaminerNoteColor(arg1, arg2) {
   return window['go']['main']['App']['UpdateExaminerNoteColor'](arg1, arg2);
+}
+
+export function UpgradeOffsetColumn() {
+  return window['go']['main']['App']['UpgradeOffsetColumn']();
+}
+
+export function UpgradePushTargetOffset(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['UpgradePushTargetOffset'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

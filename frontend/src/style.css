@@ -864,6 +864,26 @@ html, body, #root {
   transition: width 0.3s ease;
 }
 
+/* Offset upgrade: no percentage to show, so a block slides across the bar. */
+.progress-bar.indeterminate {
+  width: 30%;
+  animation: indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(340%); }
+}
+
+.offset-upgrade-error {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .import-message {
   margin-top: 12px;
   font-size: 12px;

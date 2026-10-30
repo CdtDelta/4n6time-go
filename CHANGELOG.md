@@ -2,6 +2,22 @@
 
 All notable changes to 4n6time-go are documented in this file.
 
+## v0.18.1 (2026-10-29)
+
+### Fixes
+
+- **PostgreSQL: imports and Push to PostgreSQL no longer fail on large byte offsets.** The `offset` column was a 32-bit INT on PostgreSQL, so a Plaso event with an offset above 2,147,483,647 (any position past 2 GB in a large source file) failed the whole import with `unable to encode ... into binary format for int4`, and the single import transaction rolled back every row already inserted. New PostgreSQL databases now create `offset` as BIGINT. SQLite was not affected: its INTEGER is already 64-bit.
+
+### New
+
+- **Upgrade prompt for older PostgreSQL databases.** Connecting to a database whose `offset` column is still INT shows a dialog offering to upgrade it (**Upgrade now** or **Later**). The upgrade runs `ALTER TABLE log2timeline ALTER COLUMN "offset" TYPE BIGINT` and then `ANALYZE log2timeline`. It rewrites the event table, so on a large database it takes a long time, locks the table while it runs, and needs free disk space roughly equal to the table's size. **Later** lasts for this connection only; the prompt returns on the next connect.
+- Importing into a connected PostgreSQL database, or pushing to a PostgreSQL database, whose `offset` is still INT shows the same dialog first, with **Upgrade now**, **Continue without upgrading**, and **Cancel**.
+- The upgrade's start, finish, and duration are logged at INFO, and a failure at ERROR with the full error text.
+
+### Schema
+
+- New PostgreSQL databases create `log2timeline.id` as BIGSERIAL (was SERIAL). Existing databases keep SERIAL `id`; it is not migrated and there is no prompt for it.
+
 ## v0.18.0 (2026-10-21)
 
 ### Behavior changes (query results may differ from v0.17.0)

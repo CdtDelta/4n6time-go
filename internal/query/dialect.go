@@ -27,6 +27,12 @@ type QueryDialect interface {
 	// typed, and older notes may hold a pasted "2009-07-14T04:58:36Z", which
 	// compares after every same-day space form. PostgreSQL returns the column.
 	NoteDatetimeSQL(column string) string
+
+	// OffsetSQLType returns the SQL type the notes projection casts its NULL
+	// offset to. SQLite returns INTEGER (already 64-bit); PostgreSQL returns
+	// BIGINT. On a PostgreSQL database whose offset is still INT, the UNION
+	// resolves INT and BIGINT to BIGINT, so older databases keep working.
+	OffsetSQLType() string
 }
 
 // sqliteQueryDialect is the default dialect, producing SQLite-compatible SQL.
@@ -43,6 +49,8 @@ func (d sqliteQueryDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 func (d sqliteQueryDialect) NoteDatetimeSQL(column string) string {
 	return SQLiteNoteDatetime(column)
 }
+
+func (d sqliteQueryDialect) OffsetSQLType() string { return "INTEGER" }
 
 // SQLiteNoteDatetime rewrites the ISO "T" separator and "Z" suffix that a
 // pasted grid timestamp carries. database.SQLiteDialect shares it.

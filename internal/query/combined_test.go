@@ -16,6 +16,7 @@ func (pgTestDialect) DateBetweenSQL(a, b int) string {
 	return "(datetime BETWEEN $" + string(rune('0'+a)) + " AND $" + string(rune('0'+b)) + ")"
 }
 func (pgTestDialect) NoteDatetimeSQL(column string) string { return column }
+func (pgTestDialect) OffsetSQLType() string                { return "BIGINT" }
 func (pgTestDialect) QuoteColumn(name string) string {
 	switch name {
 	case "user", "desc", "offset":
@@ -78,10 +79,15 @@ func TestNotesProjection(t *testing.T) {
 	}
 
 	pg := NotesProjection(pgTestDialect{})
-	for _, part := range []string{"-id AS id, datetime AS datetime", `description AS "desc"`, `CAST(NULL AS TEXT) AS "user"`, `CAST(NULL AS INTEGER) AS "offset"`} {
+	for _, part := range []string{"-id AS id, datetime AS datetime", `description AS "desc"`, `CAST(NULL AS TEXT) AS "user"`, `CAST(NULL AS BIGINT) AS "offset"`,
+		"CAST(NULL AS INTEGER) AS store_number", "CAST(NULL AS INTEGER) AS import_id"} {
 		if !strings.Contains(pg, part) {
 			t.Errorf("PostgreSQL projection lacks %q:\n%s", part, pg)
 		}
+	}
+	// Only offset widens; every other INT column keeps its INTEGER cast.
+	if n := strings.Count(pg, "CAST(NULL AS BIGINT)"); n != 1 {
+		t.Errorf("PostgreSQL projection has %d BIGINT casts, want 1:\n%s", n, pg)
 	}
 }
 

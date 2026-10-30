@@ -24,6 +24,9 @@ func (d *SQLiteDialect) NoteDatetimeSQL(column string) string {
 	return query.SQLiteNoteDatetime(column)
 }
 
+// OffsetSQLType is INTEGER: SQLite stores INTEGER as up to 64 bits.
+func (d *SQLiteDialect) OffsetSQLType() string { return "INTEGER" }
+
 func (d *SQLiteDialect) DateFormatSQL(column, format string) string {
 	return fmt.Sprintf("strftime('%s', %s)", format, column)
 }

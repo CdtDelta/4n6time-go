@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit } from '../wailsjs/go/main/App'
+import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit, NeedsOffsetUpgrade, UpgradeOffsetColumn, CheckPushTargetOffset, UpgradePushTargetOffset } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import ImportLabelDialog from './components/ImportLabelDialog'
 import PostgresDialog from './components/PostgresDialog'
@@ -22,6 +22,7 @@ import TabBar from './components/TabBar'
 import SettingsDialog from './components/SettingsDialog'
 import RecursiveImportSummaryDialog from './components/RecursiveImportSummaryDialog'
 import ImportNoticeDialog from './components/ImportNoticeDialog'
+import OffsetUpgradeDialog from './components/OffsetUpgradeDialog'
 import themes, { lightThemes } from './themes'
 
 const PAGE_SIZE = 1000
@@ -171,6 +172,9 @@ function App() {
   const [showRecursiveSummary, setShowRecursiveSummary] = useState(false)
   const [recursiveSummary, setRecursiveSummary] = useState(null)
   const [importNotice, setImportNotice] = useState(null)
+  // Pending offset column upgrade prompt: { context, run, proceed?, cancelled? }.
+  // Not persisted: "Later" lasts for this connection only.
+  const [offsetPrompt, setOffsetPrompt] = useState(null)
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
   const [showAddNote, setShowAddNote] = useState(false)
@@ -206,6 +210,9 @@ function App() {
   // Suppresses the TimelineChart histogram fetch during user-initiated tab switches only.
   // NOT set during handleRestoreTabSession so the histogram loads immediately on database open.
   const histogramSuppressRef = useRef(false)
+  // True while an offset column upgrade runs. Native menu items that touch the
+  // database are ignored meanwhile; the upgrade overlay covers the window.
+  const upgradeRunningRef = useRef(false)
   // Scroll row to restore after the next [events] update (tab switch).
   const pendingScrollRowRef = useRef(0)
   // Signals that the next [events] update should scroll to row 0 (page navigation).
@@ -494,6 +501,9 @@ function App() {
     setShowFilters(false)
     setSelectedEvent(null)
     setStatus(`Connected: ${info.path} (${info.eventCount.toLocaleString()} events)`)
+    if (info.offsetNeedsUpgrade) {
+      setOffsetPrompt({ context: 'connect', run: UpgradeOffsetColumn })
+    }
     await loadPage(1, info, null)
     try {
       const sessionData = await LoadTabSession()
@@ -508,8 +518,7 @@ function App() {
     } catch { /* session load failure is non-fatal */ }
   }, [loadPage, handleRestoreTabSession])
 
-  const handlePushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
-    setShowPushPostgres(false)
+  const runPushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
     setImporting(true)
     setStatus('Pushing data to PostgreSQL...')
     try {
@@ -523,6 +532,29 @@ function App() {
       setImporting(false)
     }
   }, [])
+
+  // Push to PostgreSQL: check the target's offset column first, and offer the
+  // upgrade when it is still INT. A target with no schema is not flagged.
+  const handlePushToPostgres = useCallback(async (host, port, dbName, user, password, sslMode) => {
+    setShowPushPostgres(false)
+    let needsUpgrade = false
+    try {
+      needsUpgrade = await CheckPushTargetOffset(host, port, dbName, user, password, sslMode)
+    } catch (err) {
+      setStatus('Push error: ' + err)
+      return
+    }
+    if (needsUpgrade) {
+      setOffsetPrompt({
+        context: 'push',
+        run: () => UpgradePushTargetOffset(host, port, dbName, user, password, sslMode),
+        proceed: () => runPushToPostgres(host, port, dbName, user, password, sslMode),
+        cancelled: 'Push cancelled',
+      })
+      return
+    }
+    runPushToPostgres(host, port, dbName, user, password, sslMode)
+  }, [runPushToPostgres])
 
   const doImportCSV = useCallback(async (path, label) => {
     try {
@@ -619,17 +651,71 @@ function App() {
     }
   }, [])
 
-  // Runs the import the label dialog confirmed.
-  const handleImportConfirmed = useCallback((label) => {
-    const pick = importPick
-    setImportPick(null)
-    if (!pick) return
+  const runImport = useCallback((pick, label) => {
     if (pick.kind === 'file') {
       doImportCSV(pick.path, label)
     } else {
       doImportFolderRecursive(pick.path, label)
     }
-  }, [importPick, doImportCSV, doImportFolderRecursive])
+  }, [doImportCSV, doImportFolderRecursive])
+
+  // Runs the import the label dialog confirmed. Importing into a connected
+  // PostgreSQL database whose offset column is still INT offers the upgrade
+  // first. The check asks the server, so an upgrade made since connecting counts.
+  const handleImportConfirmed = useCallback(async (label) => {
+    const pick = importPick
+    setImportPick(null)
+    if (!pick) return
+    if (dbInfoRef.current?.driver === 'postgres') {
+      let needsUpgrade = false
+      try {
+        needsUpgrade = await NeedsOffsetUpgrade()
+      } catch (err) {
+        // The import reports its own error if the database is unreachable.
+        console.error('Offset column check failed:', err)
+      }
+      if (needsUpgrade) {
+        setOffsetPrompt({
+          context: 'import',
+          run: UpgradeOffsetColumn,
+          proceed: () => runImport(pick, label),
+          cancelled: 'Import cancelled',
+        })
+        return
+      }
+    }
+    runImport(pick, label)
+  }, [importPick, runImport])
+
+  // Closes the offset upgrade prompt and, before an import or push, runs or
+  // cancels the operation it was holding.
+  const handleOffsetResolve = useCallback((result) => {
+    const prompt = offsetPrompt
+    setOffsetPrompt(null)
+    if (!prompt) return
+    switch (result) {
+      case 'upgraded':
+        setStatus('Database upgraded: the offset column now holds large values')
+        if (prompt.proceed) prompt.proceed()
+        break
+      case 'continue':
+        if (prompt.proceed) prompt.proceed()
+        break
+      case 'cancel':
+        setStatus(prompt.cancelled || '')
+        break
+      case 'failed':
+        setStatus(prompt.proceed ? `Database upgrade failed; ${(prompt.cancelled || '').toLowerCase()}` : 'Database upgrade failed')
+        break
+      default:
+        // 'later': nothing to do until the next connect, import, or push.
+        break
+    }
+  }, [offsetPrompt])
+
+  const handleOffsetRunningChange = useCallback((running) => {
+    upgradeRunningRef.current = running
+  }, [])
 
   const handleCloseDB = useCallback(async () => {
     try {
@@ -1179,11 +1265,13 @@ function App() {
   const EventsOn = window.runtime?.EventsOn || function() { return () => {} }
 
   useEffect(() => {
-    const cancelOpen = EventsOn('menu:open-database', () => { handleOpenDB() })
-    const cancelImport = EventsOn('menu:import-csv', () => { handleImportCSV() })
-    const cancelImportEZ = EventsOn('menu:import-folder-recursive', () => { handleImportFolderRecursive() })
-    const cancelClose = EventsOn('menu:close-database', () => { handleCloseDB() })
-    const cancelExport = EventsOn('menu:export-csv', () => { handleExportCSV() })
+    // Database menu items do nothing while an offset upgrade holds the table.
+    const unlessUpgrading = (fn) => () => { if (!upgradeRunningRef.current) fn() }
+    const cancelOpen = EventsOn('menu:open-database', unlessUpgrading(handleOpenDB))
+    const cancelImport = EventsOn('menu:import-csv', unlessUpgrading(handleImportCSV))
+    const cancelImportEZ = EventsOn('menu:import-folder-recursive', unlessUpgrading(handleImportFolderRecursive))
+    const cancelClose = EventsOn('menu:close-database', unlessUpgrading(handleCloseDB))
+    const cancelExport = EventsOn('menu:export-csv', unlessUpgrading(handleExportCSV))
     const cancelTheme = EventsOn('menu:theme', () => { setShowThemePicker(true) })
     const cancelCut = EventsOn('menu:cut', () => { document.execCommand('cut') })
     const cancelCopy = EventsOn('menu:copy', () => { document.execCommand('copy') })
@@ -1534,6 +1622,12 @@ function App() {
       <ImportNoticeDialog
         notice={importNotice}
         onClose={() => setImportNotice(null)}
+      />
+
+      <OffsetUpgradeDialog
+        request={offsetPrompt}
+        onResolve={handleOffsetResolve}
+        onRunningChange={handleOffsetRunningChange}
       />
 
       <PostgresDialog

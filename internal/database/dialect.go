@@ -28,6 +28,10 @@ type Dialect interface {
 	// "YYYY-MM-DD HH:MM:SS". It matches query.QueryDialect.NoteDatetimeSQL.
 	NoteDatetimeSQL(column string) string
 
+	// OffsetSQLType is the SQL type of log2timeline.offset in new databases.
+	// It matches query.QueryDialect.OffsetSQLType.
+	OffsetSQLType() string
+
 	// DateFormatSQL returns a SQL expression that formats/truncates a datetime column.
 	// SQLite uses strftime; PostgreSQL uses to_char or date_trunc.
 	DateFormatSQL(column, format string) string

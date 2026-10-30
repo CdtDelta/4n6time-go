@@ -41,6 +41,10 @@ func (d *PostgresDialect) DateBetweenSQL(paramIdx1, paramIdx2 int) string {
 // NoteDatetimeSQL returns the column unchanged: TIMESTAMP stores a parsed value.
 func (d *PostgresDialect) NoteDatetimeSQL(column string) string { return column }
 
+// OffsetSQLType is BIGINT: Plaso reports byte offsets past 4 GB, which do not
+// fit in INT. Databases created before v0.18.1 still have INT until upgraded.
+func (d *PostgresDialect) OffsetSQLType() string { return "BIGINT" }
+
 func (d *PostgresDialect) DateFormatSQL(column, format string) string {
 	pgFmt, ok := strftimeToPostgres[format]
 	if !ok {
@@ -57,12 +61,12 @@ func (d *PostgresDialect) SchemaCheckColumnSQL(table, column string) string {
 
 func (d *PostgresDialect) CreateTableSQL() string {
 	return `CREATE TABLE IF NOT EXISTS log2timeline (
-		id SERIAL PRIMARY KEY,
+		id BIGSERIAL PRIMARY KEY,
 		timezone TEXT, MACB TEXT, source TEXT, sourcetype TEXT,
 		type TEXT, "user" TEXT, host TEXT, "desc" TEXT, filename TEXT,
 		inode TEXT, notes TEXT, format TEXT, extra TEXT,
 		datetime TIMESTAMP, reportnotes TEXT, inreport TEXT,
-		tag TEXT, color TEXT, "offset" INT, store_number INT,
+		tag TEXT, color TEXT, "offset" BIGINT, store_number INT,
 		store_index INT, vss_store_number INT, URL TEXT,
 		record_number TEXT, event_identifier TEXT, event_type TEXT,
 		source_name TEXT, user_sid TEXT, computer_name TEXT,

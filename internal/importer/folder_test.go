@@ -102,8 +102,10 @@ func (m *mockStore) GetImport(id int64) (*model.ImportRecord, error) {
 	}
 	return nil, nil
 }
-func (m *mockStore) Close() error { return nil }
-func (m *mockStore) Path() string { return ":mock:" }
+func (m *mockStore) OffsetNeedsUpgrade() (bool, error) { return false, nil }
+func (m *mockStore) UpgradeOffsetColumn() error        { return nil }
+func (m *mockStore) Close() error                      { return nil }
+func (m *mockStore) Path() string                      { return ":mock:" }
 
 // writeTmpCSV writes content to a named file inside dir and returns the path.
 func writeTmpCSV(t *testing.T, dir, name, content string) string {

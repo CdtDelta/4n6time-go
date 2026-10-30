@@ -123,6 +123,7 @@ export namespace main {
 	    importedEvents: number;
 	    importUnparseable: number;
 	    importLogEnabled: boolean;
+	    offsetNeedsUpgrade: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DBInfo(source);
@@ -138,6 +139,7 @@ export namespace main {
 	        this.importedEvents = source["importedEvents"];
 	        this.importUnparseable = source["importUnparseable"];
 	        this.importLogEnabled = source["importLogEnabled"];
+	        this.offsetNeedsUpgrade = source["offsetNeedsUpgrade"];
 	    }
 	}
 	export class FilterItem {

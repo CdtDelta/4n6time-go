@@ -1791,6 +1791,9 @@ type DBInfo struct {
 	// ImportLogEnabled reports whether logging was on when the import ran, so
 	// the notice can say whether the log holds the skipped values.
 	ImportLogEnabled bool `json:"importLogEnabled"`
+	// OffsetNeedsUpgrade is true for a PostgreSQL database whose offset column
+	// is still INT (created before v0.18.1). The frontend offers the upgrade.
+	OffsetNeedsUpgrade bool `json:"offsetNeedsUpgrade"`
 }
 
 func (a *App) loadDatabase(path string) (*DBInfo, error) {
@@ -1824,12 +1827,21 @@ func (a *App) getDBInfo() (*DBInfo, error) {
 		max = ""
 	}
 
+	// A failed type check is not fatal: the database still works, and the
+	// check runs again before the next import.
+	needsUpgrade, err := a.store.OffsetNeedsUpgrade()
+	if err != nil {
+		a.logError("Offset column check failed: " + err.Error())
+		needsUpgrade = false
+	}
+
 	return &DBInfo{
-		Path:       a.store.Path(),
-		Driver:     a.driver,
-		EventCount: count,
-		MinDate:    min,
-		MaxDate:    max,
+		Path:               a.store.Path(),
+		Driver:             a.driver,
+		EventCount:         count,
+		MinDate:            min,
+		MaxDate:            max,
+		OffsetNeedsUpgrade: needsUpgrade,
 	}, nil
 }
 
