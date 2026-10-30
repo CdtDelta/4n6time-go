@@ -74,6 +74,10 @@ export function GetDistinctValues(arg1) {
   return window['go']['main']['App']['GetDistinctValues'](arg1);
 }
 
+export function GetFilterValues(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetFilterValues'](arg1, arg2, arg3);
+}
+
 export function GetFilteredDistinctValues(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetFilteredDistinctValues'](arg1, arg2, arg3, arg4);
 }

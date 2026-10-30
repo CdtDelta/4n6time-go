@@ -178,6 +178,9 @@ function App() {
   const [showPostgres, setShowPostgres] = useState(false)
   const [showPushPostgres, setShowPushPostgres] = useState(false)
   const [showAddNote, setShowAddNote] = useState(false)
+  // Bumped only by data changes (import, push, examiner note add or delete,
+  // stale tab refresh). FilterPanel reloads its values and drops its cache on
+  // a bump; filter UI actions (Apply, Clear, histogram range) never bump it.
   const [filterVersion, setFilterVersion] = useState(0)
   const [pageInputValue, setPageInputValue] = useState('1')
   const [bookmarkOnly, setBookmarkOnly] = useState(false)
@@ -526,6 +529,9 @@ function App() {
       if (result) {
         setStatus(result)
       }
+      // Push returns after the target's metadata is committed. The open
+      // database is unchanged, but drop cached filter values as for any data change.
+      setFilterVersion(v => v + 1)
     } catch (err) {
       setStatus('Push error: ' + err)
     } finally {
@@ -563,6 +569,8 @@ function App() {
       const info = await ImportCSV(path, label)
       if (info) {
         setDbInfo(info)
+        // Import returns after UpdateMetadata commits; new values need a reload.
+        setFilterVersion(v => v + 1)
         setActiveFilters(null)
         setShowFilters(false)
         setSelectedEvent(null)
@@ -622,6 +630,8 @@ function App() {
         const info = await GetCurrentDBInfo()
         if (info) {
           setDbInfo(info)
+          // Import returns after UpdateMetadata commits; new values need a reload.
+          setFilterVersion(v => v + 1)
           setActiveFilters(null)
           setShowFilters(false)
           setSelectedEvent(null)

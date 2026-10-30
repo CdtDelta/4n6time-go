@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react'
-import { GetDistinctValues, GetMinMaxDate, GetFilteredDistinctValues, GetFilteredMinMaxDate } from '../../wailsjs/go/main/App'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { GetFilterValues, GetMinMaxDate, GetFilteredMinMaxDate } from '../../wailsjs/go/main/App'
 
 const ADVANCED_MODE_TIP = 'Not applied in advanced search mode. Add conditions to your WHERE clause.'
 const OPERATORS = ['=', '!=', 'LIKE', 'NOT LIKE']
@@ -7,6 +7,26 @@ const OPERATORS = ['=', '!=', 'LIKE', 'NOT LIKE']
 // importOptionLabel is the dropdown text for one import: its label and file
 // name when it has a label, otherwise its file name. Records missing from the
 // map (not expected once loaded) fall back to a plain note, never the bare id.
+// scopeKey identifies a filter panel scope: the tab base query, or the
+// unscoped main view. It keys the filter values cache.
+function scopeKey(baseQuery) {
+  if (!baseQuery) return 'unscoped'
+  return JSON.stringify([baseQuery.field, baseQuery.op, baseQuery.value])
+}
+
+// sortForDisplay orders each field's values as the panel always has: import
+// ids numerically, every other field with the default text sort.
+function sortForDisplay(result) {
+  const values = {}
+  for (const [field, list] of Object.entries(result)) {
+    const copy = [...(list || [])]
+    values[field] = field === 'import_id'
+      ? copy.sort((a, b) => Number(a) - Number(b))
+      : copy.sort()
+  }
+  return values
+}
+
 function importOptionLabel(id, records) {
   const rec = records[id]
   if (!rec) return `Import ${id} (record missing)`
@@ -22,6 +42,10 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
   const [dateTo, setDateTo] = useState('')
   const [distinctValues, setDistinctValues] = useState({})
   const [loading, setLoading] = useState(false)
+  // Filter values by scope, in memory only. Values depend only on the data and
+  // the tab base query, so a new database (dbInfo) or a data change
+  // (filterVersion) starts a new cache; a filter Apply or Clear does not.
+  const cacheRef = useRef({ entries: new Map(), dbInfo: null, version: null })
 
   // Sync local state when activeFilters change externally (e.g. timeline selection)
   useEffect(() => {
@@ -42,32 +66,38 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
     { field: 'import_id', label: 'Import' },
   ]
 
-  // Load distinct values when panel becomes visible or db changes
+  // Load the dropdown values when the panel becomes visible, the database or
+  // its data changes, or the tab scope changes. Active filters are not a
+  // dependency: the values never depend on them, only on the tab base query.
+  // activeFilters is still read below, at run time, for the date range.
   useEffect(() => {
     if (!visible || !dbInfo) return
+
+    if (cacheRef.current.dbInfo !== dbInfo || cacheRef.current.version !== filterVersion) {
+      // Replaced, not cleared, so a request still in flight for the old data
+      // writes into the discarded map.
+      cacheRef.current = { entries: new Map(), dbInfo, version: filterVersion }
+    }
+    const entries = cacheRef.current.entries
+    const key = scopeKey(baseQuery)
 
     let cancelled = false
     setLoading(true)
 
     async function loadValues() {
-      const values = {}
-      for (const f of filterFields) {
+      let values = entries.get(key)
+      if (!values) {
+        values = {}
         try {
-          let result
-          if (baseQuery) {
-            result = await GetFilteredDistinctValues(f.field, baseQuery.field, baseQuery.op, baseQuery.value)
-          } else {
-            result = await GetDistinctValues(f.field)
-          }
-          if (!cancelled && result) {
-            // Import ids sort numerically; every other field sorts as text.
-            const keys = Object.keys(result)
-            values[f.field] = f.field === 'import_id'
-              ? keys.sort((a, b) => Number(a) - Number(b))
-              : keys.sort()
+          const result = await GetFilterValues(baseQuery?.field || '', baseQuery?.op || '', baseQuery?.value || '')
+          values = sortForDisplay(result || {})
+          // A field that failed is missing; leave the scope uncached so the
+          // next load retries it.
+          if (filterFields.every(f => f.field in values)) {
+            entries.set(key, values)
           }
         } catch (err) {
-          console.error(`Error loading ${f.field} values:`, err)
+          console.error('Error loading filter values:', err)
         }
       }
 
@@ -101,7 +131,7 @@ function FilterPanel({ visible, onApply, onClear, dbInfo, activeFilters, filterV
 
     loadValues()
     return () => { cancelled = true }
-  }, [visible, dbInfo, filterVersion, activeFilters, baseQuery])
+  }, [visible, dbInfo, filterVersion, baseQuery]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const addFilter = useCallback(() => {
     setFilters(prev => [...prev, { field: 'source', operator: '=', value: '' }])

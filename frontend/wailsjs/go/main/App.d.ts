@@ -41,6 +41,8 @@ export function GetCurrentDBInfo():Promise<main.DBInfo>;
 
 export function GetDistinctValues(arg1:string):Promise<Record<string, number>>;
 
+export function GetFilterValues(arg1:string,arg2:string,arg3:string):Promise<Record<string, Array<string>>>;
+
 export function GetFilteredDistinctValues(arg1:string,arg2:string,arg3:string,arg4:string):Promise<Record<string, number>>;
 
 export function GetFilteredMinMaxDate(arg1:string,arg2:string,arg3:string):Promise<Array<string>>;

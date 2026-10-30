@@ -40,6 +40,11 @@ type Store interface {
 	GetDistinctValues(field string) (map[string]int64, error)
 	GetDistinctValuesFiltered(field, whereClause string, whereArgs []interface{}) (map[string]int64, error)
 	GetDistinctTags() ([]string, error)
+	// GetFilterValues returns the unscoped filter panel values for each field
+	// from the l2t_* metadata tables and l2t_imports, falling back to the live
+	// GetDistinctValues query only when the metadata was never built. A field
+	// that fails is omitted and its error joined into the returned error.
+	GetFilterValues(fields []string) (map[string][]string, error)
 	GetMinMaxDate() (string, string, error)
 	GetMinMaxDateFiltered(whereClause string, whereArgs []interface{}) (string, string, error)
 	GetTimelineHistogram(whereClause string, whereArgs []interface{}, window *HistogramWindow) ([]TimelineBucket, error)
