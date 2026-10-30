@@ -106,6 +106,10 @@ export function GetMinMaxDate() {
   return window['go']['main']['App']['GetMinMaxDate']();
 }
 
+export function GetOpenFailure() {
+  return window['go']['main']['App']['GetOpenFailure']();
+}
+
 export function GetPostgresHost() {
   return window['go']['main']['App']['GetPostgresHost']();
 }
@@ -160,6 +164,10 @@ export function PushToPostgres(arg1, arg2, arg3, arg4, arg5, arg6) {
 
 export function QueryEvents(arg1) {
   return window['go']['main']['App']['QueryEvents'](arg1);
+}
+
+export function RecountEvents() {
+  return window['go']['main']['App']['RecountEvents']();
 }
 
 export function SaveQuery(arg1, arg2) {

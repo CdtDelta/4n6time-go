@@ -79,6 +79,9 @@ func (m *mockStore) LoadTabSession() (string, error)                       { ret
 func (m *mockStore) UpdateMetadata() error                                 { return nil }
 func (m *mockStore) RebuildIndexes(_ []string) error                       { return nil }
 func (m *mockStore) Migrate() error                                        { return nil }
+func (m *mockStore) GetStat(_ string) (int64, bool, error)                 { return 0, false, nil }
+func (m *mockStore) InsertStatIfMissing(_ string, _ int64) error           { return nil }
+func (m *mockStore) SetStat(_ string, _ int64) error                       { return nil }
 func (m *mockStore) CreateImport(rec model.ImportRecord) (int64, error) {
 	rec.ID = int64(len(m.imports) + 1)
 	rec.Status = "in_progress"

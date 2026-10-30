@@ -6,19 +6,27 @@ All notable changes to 4n6time-go are documented in this file.
 
 ### Performance
 
+- **The total event count is cached.** Opening, connecting to, or importing into a database, and loading the grid with no filters, now read the evidence total from a new `l2t_stats` table instead of counting every row. On a 77.5M-row PostgreSQL database that count took about 24 seconds each time. Every import and push updates the cached total in the same transaction that inserts the events, so a failed import never changes it and simultaneous imports into one PostgreSQL database add up correctly. Filtered counts and the examiner notes count are still counted live. New databases (created by an import, by Create & Connect, or as a new push target) start with a total of zero, so their first import is counted without a full count afterward.
+
 - **The filter panel loads its dropdown values from the metadata tables instead of scanning the event table.** Source, sourcetype, type, user, and host come from the `l2t_*` tables, and Import from the import records, in one call. On a 77.5M-row PostgreSQL database, Clear Filters used to take minutes while the panel scanned every event once per field. The event table is scanned only if the metadata was never built.
 - **The filter panel no longer reloads on Apply, Clear, or histogram selection.** It reloads only when the data changes: opening or connecting to a database, an import, a push to PostgreSQL, adding or deleting an examiner note, or refreshing a tab.
 - **Filter panel values are cached per tab.** Switching back to a tab reuses its values instead of querying again. The cache is cleared whenever the data changes.
 
 ### New
 
+- **Tools > Recount Events** counts the events live and stores the result as the cached total, then shows the new total. Use it if the total shown looks wrong; the old and new values are logged.
+
 - **Import failure dialog.** When a single-file import fails, a dialog now shows the file name, the error text, and what the failure left in the database (for example "No events from this file were added"), with a button to open the Imports list. Before, the error appeared only in the status bar, where the next grid load replaced it. The status bar message is kept.
 - **Imports list (File > Imports...).** A read-only list of every import record in the open database: ID, label, file name, status, event count, import time (UTC), and error message. Failed imports are highlighted.
 - **Import records keep the error text.** `l2t_imports` has a new `error_message` column, filled for failed imports. Push to PostgreSQL copies it.
 - **Read-only databases that need an upgrade.** Opening a database created by an older version of 4n6time from read-only storage (a write-protected drive, or a read-only file or folder) now shows a dialog explaining that it needs a one-time upgrade, that the upgrade cannot be written there, and that you can open a copy saved to a writable location. The original file is not changed. Before, the raw database error appeared in the status bar. Databases that are already current still open normally from read-only storage.
+- **Open failure dialog.** When a database cannot be opened, connected to, or created for any reason other than read-only storage, a dialog now shows the file or PostgreSQL connection (password removed), a plain explanation (for example "This file isn't a 4n6time database." or "Could not reach the PostgreSQL server."), the raw error, and which database is still open. Before, only the status bar showed the error. The status bar message is kept.
 - **PostgreSQL insert errors name the column.** An error such as `failed to encode args[18]` now also says which column and value caused it, for example `inserting event 15017285: column "offset" value 5747310864: ...`. The original error text is kept.
 
 ### Fixes
+
+- **Opening a database no longer closes the current one first.** The new database is opened before the current one is closed, and the current database's tabs are saved first. If the open fails (including a read-only database that needs an upgrade), the current database stays open with its tabs and filters as they were. Before, a failed open left the window showing a database that was already closed, and switching databases lost the previous database's tabs.
+- **Only annotation fields can be edited.** Event updates are limited to tag, color, notes, report notes, and bookmark. Requests to change evidence fields such as source, host, datetime, or the import ID are refused.
 
 - **Recursive import tells insert failures from parse failures.** A file that parsed but whose events the database rejected is listed as skipped with "insert error: ..." instead of "parse error: ...".
 - **Failed imports that committed events now refresh the view.** When an import fails after its events were saved (the import record or the filter panel metadata could not be updated), the grid, the database details, and the filter panel reload so those events appear.
@@ -31,6 +39,7 @@ All notable changes to 4n6time-go are documented in this file.
 
 ### Schema
 
+- New table `l2t_stats (key, value)` holding the cached evidence count (`event_count`). Existing databases get it when opened; on read-only storage, a database without it gets the read-only upgrade dialog. A database with no events gets `event_count = 0` when the table is created or migrated; a database that already has events gets its row on first read.
 - `l2t_imports` gains a nullable `error_message TEXT` column. Existing databases get it automatically when opened (SQLite and PostgreSQL); existing records read as having no error. A push target gets it when the push opens it.
 
 ## v0.18.1 (2026-10-29)

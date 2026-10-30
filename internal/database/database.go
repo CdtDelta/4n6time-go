@@ -79,7 +79,21 @@ func (db *SQLiteStore) migrate() error {
 	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
 
 	// Add import provenance (l2t_imports table, log2timeline.import_id column)
-	return migrateImportProvenance(db.conn, db.dialect)
+	if err := migrateImportProvenance(db.conn, db.dialect); err != nil {
+		return err
+	}
+
+	// Cached statistics (l2t_stats). Its error is returned so a read-only
+	// older database gets the read-only upgrade dialog.
+	if err := migrateStats(db.conn, db.dialect); err != nil {
+		return err
+	}
+
+	// Seed event_count on an empty database. The error is ignored: the first
+	// read rebuilds a missing row, and on read-only storage the seed cannot
+	// write, which must not stop a current database from opening.
+	seedEventCount(db.conn, db.dialect)
+	return nil
 }
 
 // SaveTabSession stores tab session JSON. Deletes any existing row first.
@@ -232,6 +246,12 @@ func (db *SQLiteStore) createSchema(indexFields []string) error {
 	if err := migrateImportProvenance(tx, db.dialect); err != nil {
 		return err
 	}
+	if err := migrateStats(tx, db.dialect); err != nil {
+		return err
+	}
+	if err := seedEventCount(tx, db.dialect); err != nil {
+		return err
+	}
 
 	// Create indexes
 	for _, field := range indexFields {
@@ -244,22 +264,16 @@ func (db *SQLiteStore) createSchema(indexFields []string) error {
 	return tx.Commit()
 }
 
-// InsertEvent inserts a single event into the database.
+// InsertEvent inserts a single event into the database. It goes through
+// InsertEvents so the cached event count is updated in the same transaction.
 func (db *SQLiteStore) InsertEvent(e *model.Event) error {
-	_, err := db.conn.Exec(db.dialect.InsertEventSQL(),
-		e.Timezone, e.MACB, e.Source, e.SourceType, e.Type,
-		e.User, e.Host, e.Desc, e.Filename, e.Inode,
-		e.Notes, e.Format, e.Extra, e.Datetime, e.ReportNotes,
-		e.InReport, e.Tag, e.Color, e.Offset, e.StoreNumber,
-		e.StoreIndex, e.VSSStoreNumber, e.URL, e.RecordNumber,
-		e.EventID, e.EventType, e.SourceName, e.UserSID, e.ComputerName,
-		e.Bookmark, importIDArg(e.ImportID),
-	)
+	_, err := db.InsertEvents([]*model.Event{e}, nil)
 	return err
 }
 
-// InsertEvents inserts a batch of events inside a single transaction.
-// The onProgress callback is called every 10,000 events with the current count.
+// InsertEvents inserts a batch of events inside a single transaction, and adds
+// the inserted count to the cached event count (l2t_stats) in that same
+// transaction. The onProgress callback is called every 10,000 events with the current count.
 // Pass nil for onProgress if you don't need progress updates.
 func (db *SQLiteStore) InsertEvents(events []*model.Event, onProgress func(count int)) (int, error) {
 	tx, err := db.conn.Begin()
@@ -292,6 +306,11 @@ func (db *SQLiteStore) InsertEvents(events []*model.Event, onProgress func(count
 		if onProgress != nil && inserted%10000 == 0 {
 			onProgress(inserted)
 		}
+	}
+
+	// Same transaction as the rows: a failed import never changes the count.
+	if err := incrementStat(tx, db.dialect, StatEventCount, inserted); err != nil {
+		return inserted, err
 	}
 
 	if err := tx.Commit(); err != nil {

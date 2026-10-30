@@ -167,7 +167,20 @@ func (db *PostgresStore) migrate() error {
 	db.conn.Exec(db.dialect.CreateTabSessionsTableSQL())
 
 	// Add import provenance (l2t_imports table, log2timeline.import_id column)
-	return migrateImportProvenance(db.conn, db.dialect)
+	if err := migrateImportProvenance(db.conn, db.dialect); err != nil {
+		return err
+	}
+
+	// Cached statistics (l2t_stats)
+	if err := migrateStats(db.conn, db.dialect); err != nil {
+		return err
+	}
+
+	// Seed event_count on an empty database. The error is ignored: the first
+	// read rebuilds a missing row, and a role without write access must still
+	// be able to connect.
+	seedEventCount(db.conn, db.dialect)
+	return nil
 }
 
 // Migrate applies any pending schema migrations.
@@ -457,6 +470,14 @@ func (db *PostgresStore) createSchema(indexFields []string) error {
 	if err := migrateImportProvenance(tx, db.dialect); err != nil {
 		return err
 	}
+	if err := migrateStats(tx, db.dialect); err != nil {
+		return err
+	}
+	// A push into an existing target that has evidence but no row is not
+	// seeded; the first read of that database rebuilds it.
+	if err := seedEventCount(tx, db.dialect); err != nil {
+		return err
+	}
 
 	// Create indexes
 	for _, field := range indexFields {
@@ -469,14 +490,16 @@ func (db *PostgresStore) createSchema(indexFields []string) error {
 	return tx.Commit()
 }
 
-// InsertEvent inserts a single event into the database.
+// InsertEvent inserts a single event into the database. It goes through
+// InsertEvents so the cached event count is updated in the same transaction.
 func (db *PostgresStore) InsertEvent(e *model.Event) error {
-	_, err := db.conn.Exec(db.dialect.InsertEventSQL(), pgInsertEventArgs(e)...)
+	_, err := db.InsertEvents([]*model.Event{e}, nil)
 	return err
 }
 
-// InsertEvents inserts a batch of events inside a single transaction.
-// The onProgress callback is called every 10,000 events with the current count.
+// InsertEvents inserts a batch of events inside a single transaction, and adds
+// the inserted count to the cached event count (l2t_stats) in that same
+// transaction. The onProgress callback is called every 10,000 events with the current count.
 // Pass nil for onProgress if you don't need progress updates.
 func (db *PostgresStore) InsertEvents(events []*model.Event, onProgress func(count int)) (int, error) {
 	tx, err := db.conn.Begin()
@@ -501,6 +524,12 @@ func (db *PostgresStore) InsertEvents(events []*model.Event, onProgress func(cou
 		if onProgress != nil && inserted%10000 == 0 {
 			onProgress(inserted)
 		}
+	}
+
+	// Same transaction as the rows: a failed import never changes the count,
+	// and concurrent imports add up under the row lock.
+	if err := incrementStat(tx, db.dialect, StatEventCount, inserted); err != nil {
+		return inserted, err
 	}
 
 	if err := tx.Commit(); err != nil {

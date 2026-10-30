@@ -204,6 +204,28 @@ export namespace main {
 	        this.persist = source["persist"];
 	    }
 	}
+	export class OpenFailure {
+	    backend: string;
+	    action: string;
+	    target: string;
+	    message: string;
+	    error: string;
+	    stillOpen: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new OpenFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backend = source["backend"];
+	        this.action = source["action"];
+	        this.target = source["target"];
+	        this.message = source["message"];
+	        this.error = source["error"];
+	        this.stillOpen = source["stillOpen"];
+	    }
+	}
 	export class QueryRequest {
 	    filters: FilterItem[];
 	    logic: string;
@@ -308,6 +330,22 @@ export namespace main {
 	        this.path = source["path"];
 	        this.file = source["file"];
 	        this.error = source["error"];
+	    }
+	}
+	export class RecountResult {
+	    previous: number;
+	    hadPrevious: boolean;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecountResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.previous = source["previous"];
+	        this.hadPrevious = source["hadPrevious"];
+	        this.count = source["count"];
 	    }
 	}
 	export class TimelineBucket {

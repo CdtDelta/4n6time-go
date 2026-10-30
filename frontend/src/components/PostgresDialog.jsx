@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ConnectPostgres, CreatePostgresDatabase, GetPostgresHost } from '../../wailsjs/go/main/App'
 
-function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onClose }) {
+function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onFailure, onClose }) {
   const [host, setHost] = useState('localhost')
   const [port, setPort] = useState('5432')
   const [dbName, setDbName] = useState('')
@@ -35,6 +35,8 @@ function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onClose 
       }
     } catch (err) {
       setError(String(err))
+      // The parent shows OpenFailureDialog and the status bar message.
+      if (onFailure) onFailure(err)
     } finally {
       setLoading(false)
     }
@@ -54,6 +56,8 @@ function PostgresDialog({ visible, mode = 'connect', onConnect, onPush, onClose 
       }
     } catch (err) {
       setError(String(err))
+      // The parent shows OpenFailureDialog and the status bar message.
+      if (onFailure) onFailure(err)
     } finally {
       setLoading(false)
     }

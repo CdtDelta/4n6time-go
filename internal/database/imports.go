@@ -24,22 +24,37 @@ const importIDIndexName = "import_id_idx"
 // cannot change after insert.
 var ErrReadOnlyField = errors.New("is read-only")
 
-// readOnlyFields lists log2timeline columns that UpdateEvent refuses to change.
-// import_id is write-once: it is set when the event is inserted and never
-// rewritten, so provenance cannot be edited through any update path.
+// readOnlyFields lists log2timeline columns that are never editable, whatever
+// updatableFields says. import_id is write-once: it is set when the event is
+// inserted and never rewritten, so provenance cannot be edited through any
+// update path. Kept as an explicit guard alongside the allowlist.
 var readOnlyFields = map[string]bool{
 	"import_id": true,
 }
 
+// updatableFields lists the only log2timeline columns UpdateEvent may change:
+// the examiner's own annotations. The event detail panel sends tag, color,
+// notes, and reportnotes; bookmark is examiner state too (the UI toggles it
+// through ToggleBookmark and BulkSetBookmark). Every other column is evidence
+// as imported, including import_id, which is write-once provenance.
+var updatableFields = map[string]bool{
+	"tag":         true,
+	"color":       true,
+	"notes":       true,
+	"reportnotes": true,
+	"bookmark":    true,
+}
+
 // checkUpdatableField validates one field name from an UpdateEvent map. Both
 // stores call it for every field before building SQL, so a rejected field
-// never leads to a partial update.
+// never leads to a partial update. A known column outside updatableFields is
+// read-only (ErrReadOnlyField); a name that is not a column is invalid.
 func checkUpdatableField(field string) error {
-	if readOnlyFields[field] {
-		return fmt.Errorf("%s %w", field, ErrReadOnlyField)
-	}
 	if !isValidField(field) {
 		return fmt.Errorf("invalid field name: %s", field)
+	}
+	if readOnlyFields[field] || !updatableFields[field] {
+		return fmt.Errorf("%s %w", field, ErrReadOnlyField)
 	}
 	return nil
 }

@@ -100,4 +100,9 @@ type Dialect interface {
 	// SchemaCheckColumnSQL finds no column. PostgreSQL also uses ADD COLUMN IF
 	// NOT EXISTS, so two connections migrating at once cannot fail on it.
 	AddImportErrorColumnSQL() string
+
+	// CreateStatsTableSQL returns DDL for l2t_stats, a key and 64-bit integer
+	// value table for cached statistics. Its one row today is event_count, the
+	// number of evidence rows in log2timeline (see stats.go).
+	CreateStatsTableSQL() string
 }

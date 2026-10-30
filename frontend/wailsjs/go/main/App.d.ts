@@ -57,6 +57,8 @@ export function GetLoggingStatus():Promise<main.LoggingStatus>;
 
 export function GetMinMaxDate():Promise<Array<string>>;
 
+export function GetOpenFailure():Promise<main.OpenFailure>;
+
 export function GetPostgresHost():Promise<string>;
 
 export function GetReadOnlyOpenFailure():Promise<main.ReadOnlyOpenFailure>;
@@ -84,6 +86,8 @@ export function OpenDatabase():Promise<main.DBInfo>;
 export function PushToPostgres(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:string):Promise<string>;
 
 export function QueryEvents(arg1:main.QueryRequest):Promise<main.QueryResponse>;
+
+export function RecountEvents():Promise<main.RecountResult>;
 
 export function SaveQuery(arg1:string,arg2:string):Promise<void>;
 

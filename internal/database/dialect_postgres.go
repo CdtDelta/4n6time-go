@@ -162,3 +162,10 @@ func (d *PostgresDialect) InsertImportSQL() string {
 func (d *PostgresDialect) AddImportErrorColumnSQL() string {
 	return `ALTER TABLE l2t_imports ADD COLUMN IF NOT EXISTS error_message TEXT`
 }
+
+func (d *PostgresDialect) CreateStatsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_stats (
+		key TEXT PRIMARY KEY,
+		value BIGINT
+	)`
+}

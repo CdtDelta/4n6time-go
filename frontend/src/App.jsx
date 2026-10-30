@@ -3,7 +3,7 @@ import { AgGridReact } from 'ag-grid-react'
 import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 
-import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit, NeedsOffsetUpgrade, UpgradeOffsetColumn, CheckPushTargetOffset, UpgradePushTargetOffset, GetLastImportFailure, GetReadOnlyOpenFailure } from '../wailsjs/go/main/App'
+import { OpenDatabase, SelectImportFile, SelectImportFolder, ImportCSV, ImportFolderRecursive, GetImports, GetCurrentDBInfo, CloseDatabase, QueryEvents, ExportCSV, GetVersion, ToggleBookmark, ConnectPostgres, CreatePostgresDatabase, PushToPostgres, AddExaminerNote, DeleteExaminerNote, UpdateExaminerNoteColor, AdvancedSearch, SaveQuery, BulkUpdateColor, BulkAddTag, BulkSetBookmark, GetTabLimit, SaveTabSession, LoadTabSession, GetAutoRestoreTabs, ForceQuit, NeedsOffsetUpgrade, UpgradeOffsetColumn, CheckPushTargetOffset, UpgradePushTargetOffset, GetLastImportFailure, GetReadOnlyOpenFailure, GetOpenFailure, RecountEvents } from '../wailsjs/go/main/App'
 import ImportProgress from './components/ImportProgress'
 import ImportLabelDialog from './components/ImportLabelDialog'
 import PostgresDialog from './components/PostgresDialog'
@@ -25,6 +25,8 @@ import ImportNoticeDialog from './components/ImportNoticeDialog'
 import ImportFailureDialog from './components/ImportFailureDialog'
 import ImportsDialog from './components/ImportsDialog'
 import ReadOnlyDatabaseDialog from './components/ReadOnlyDatabaseDialog'
+import OpenFailureDialog from './components/OpenFailureDialog'
+import RecountResultDialog from './components/RecountResultDialog'
 import OffsetUpgradeDialog from './components/OffsetUpgradeDialog'
 import themes, { lightThemes } from './themes'
 
@@ -181,6 +183,15 @@ function App() {
   // readOnlyOpen is the main.ReadOnlyOpenFailure of a database that needs an
   // upgrade but is on read-only storage.
   const [readOnlyOpen, setReadOnlyOpen] = useState(null)
+  // openFailure is the main.OpenFailure of any other failed open, connect,
+  // or create.
+  const [openFailure, setOpenFailure] = useState(null)
+  // recountResult is the main.RecountResult of Tools > Recount Events.
+  // eventCountOverride shows its total in the header without replacing dbInfo,
+  // which would refetch the histogram and filter panel; it is cleared whenever
+  // dbInfo changes.
+  const [recountResult, setRecountResult] = useState(null)
+  const [eventCountOverride, setEventCountOverride] = useState(null)
   // Pending offset column upgrade prompt: { context, run, proceed?, cancelled? }.
   // Not persisted: "Later" lasts for this connection only.
   const [offsetPrompt, setOffsetPrompt] = useState(null)
@@ -271,6 +282,7 @@ function App() {
   useEffect(() => { tabsRef.current = tabs }, [tabs])
   useEffect(() => { activeTabIdRef.current = activeTabId }, [activeTabId])
   useEffect(() => { dbInfoRef.current = dbInfo }, [dbInfo])
+  useEffect(() => { setEventCountOverride(null) }, [dbInfo])
 
   // Import records are loaded once per database state change. Every open and
   // every completed import sets dbInfo, so this covers all of them. Event
@@ -476,49 +488,45 @@ function App() {
     setPendingSession(null)
   }, [])
 
-  // Put the UI into its no-database state without touching the backend. Used
-  // when an open fails after the backend already closed the previous database
-  // (loadDatabase closes it before opening the new file).
-  const resetToNoDatabase = useCallback(() => {
-    dbInfoRef.current = null
-    setDbInfo(null)
-    setEvents([])
-    setTotalCount(0)
-    setCurrentPage(1)
-    setActiveFilters(null)
-    setShowFilters(false)
-    setSelectedEvent(null)
-    setPendingSession(null)
-    setTabs([makeTab(MAIN_TAB_ID, 'All Events')])
-    setActiveTabId(MAIN_TAB_ID)
-    activeBaseQueryRef.current = null
-  }, [])
-
-  // Shared failure handling for every database open path. A database that
-  // needs an upgrade but is on read-only storage gets ReadOnlyDatabaseDialog
-  // instead of the raw error. A failure reading that state is logged and
-  // shown, not swallowed.
+  // Shared failure handling for every database open, connect, and create
+  // path. The backend opens the new database before closing the current one,
+  // so after a failure the current database (if any) is still open and its UI
+  // state is left as is. A database that needs an upgrade but is on read-only
+  // storage gets ReadOnlyDatabaseDialog; any other recorded failure gets
+  // OpenFailureDialog. The status bar keeps the raw error. A failure reading
+  // that state is logged and shown, not swallowed.
   const handleOpenFailure = useCallback(async (err) => {
     setStatus('Error: ' + err)
     let readOnly = null
+    let failure = null
     try {
       readOnly = await GetReadOnlyOpenFailure()
+      if (!readOnly) {
+        failure = await GetOpenFailure()
+      }
     } catch (bindErr) {
-      console.error('GetReadOnlyOpenFailure failed:', bindErr)
-      setStatus(`Error: ${err} (could not check for a read-only database: ${bindErr})`)
+      console.error('Reading the open failure failed:', bindErr)
+      setStatus(`Error: ${err} (could not read the failure details: ${bindErr})`)
       return
     }
     if (readOnly) {
-      resetToNoDatabase()
       setStatus('Database not opened: read-only storage, upgrade needed')
       setReadOnlyOpen(readOnly)
+    } else if (failure) {
+      setOpenFailure(failure)
     }
-  }, [resetToNoDatabase])
+  }, [])
 
   // Every open path (welcome screen button, toolbar Open, File > Open
-  // Database) calls this.
+  // Database) calls this. With a database open, its tab session is saved
+  // first, as handleCloseDB does; if the open is cancelled or fails, that
+  // database stays open and the save is harmless.
   const handleOpenDB = useCallback(async () => {
     try {
+      if (dbInfoRef.current) {
+        const sessionData = buildTabSessionJSON(tabsRef.current, activeTabIdRef.current, liveTabStateRef.current)
+        await SaveTabSession(sessionData).catch(() => {})
+      }
       setStatus('Opening database...')
       const info = await OpenDatabase()
       if (info) {
@@ -546,6 +554,25 @@ function App() {
       await handleOpenFailure(err)
     }
   }, [loadPage, handleRestoreTabSession, handleOpenFailure])
+
+  // Tools > Recount Events: count the evidence rows live and store the total
+  // as the cached event count, then show it and refresh the grid total.
+  const handleRecountEvents = useCallback(async () => {
+    if (!dbInfoRef.current) {
+      setStatus('Recount Events: no database is open')
+      return
+    }
+    setStatus('Recounting events...')
+    try {
+      const result = await RecountEvents()
+      setEventCountOverride(result.count)
+      setRecountResult(result)
+      await loadPage(currentPage)
+      setStatus(`Recounted: ${result.count.toLocaleString()} events`)
+    } catch (err) {
+      setStatus('Recount error: ' + err)
+    }
+  }, [loadPage, currentPage])
 
   const handlePostgresConnect = useCallback(async (info) => {
     setShowPostgres(false)
@@ -1367,6 +1394,7 @@ function App() {
     const cancelLogging = EventsOn('menu:logging', () => { setShowLogging(true) })
     const cancelSettings = EventsOn('menu:settings', () => { setShowSettings(true) })
     const cancelImports = EventsOn('menu:imports', () => { setShowImports(true) })
+    const cancelRecount = EventsOn('menu:recount-events', unlessUpgrading(handleRecountEvents))
     return () => {
       if (typeof cancelOpen === 'function') cancelOpen()
       if (typeof cancelImport === 'function') cancelImport()
@@ -1383,8 +1411,9 @@ function App() {
       if (typeof cancelLogging === 'function') cancelLogging()
       if (typeof cancelSettings === 'function') cancelSettings()
       if (typeof cancelImports === 'function') cancelImports()
+      if (typeof cancelRecount === 'function') cancelRecount()
     }
-  }, [handleOpenDB, handleImportCSV, handleImportFolderRecursive, handleCloseDB, handleExportCSV])
+  }, [handleOpenDB, handleImportCSV, handleImportFolderRecursive, handleCloseDB, handleExportCSV, handleRecountEvents])
 
   // Handle window close button and File > Quit: show React confirmation dialog.
   // Registered once with empty deps; actual save+quit handled in the dialog's confirm handler.
@@ -1489,6 +1518,7 @@ function App() {
       <PostgresDialog
         visible={showPostgres}
         onConnect={handlePostgresConnect}
+        onFailure={handleOpenFailure}
         onClose={() => setShowPostgres(false)}
       />
 
@@ -1512,6 +1542,16 @@ function App() {
       <ReadOnlyDatabaseDialog
         failure={readOnlyOpen}
         onClose={() => setReadOnlyOpen(null)}
+      />
+
+      <OpenFailureDialog
+        failure={openFailure}
+        onClose={() => setOpenFailure(null)}
+      />
+
+      <RecountResultDialog
+        result={recountResult}
+        onClose={() => setRecountResult(null)}
       />
 
       <ImportsDialog
@@ -1712,7 +1752,7 @@ function App() {
           <button onClick={() => setShowPushPostgres(true)}>Push to PostgreSQL</button>
         )}
         <span className="db-info">
-          {dbInfo.path} | {dbInfo.eventCount.toLocaleString()} events
+          {dbInfo.path} | {(eventCountOverride ?? dbInfo.eventCount).toLocaleString()} events
           {dbInfo.minDate && ` | ${dbInfo.minDate} to ${dbInfo.maxDate}`}
         </span>
       </div>

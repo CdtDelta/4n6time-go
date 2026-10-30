@@ -106,6 +106,7 @@ func TestOpenEntryPointsRecordReadOnlyFailure(t *testing.T) {
 			if _, err := app.loadDatabase(currentDatabase(t)); err != nil {
 				t.Fatalf("opening the first database: %v", err)
 			}
+			first := app.store
 
 			_, err := open(app, path)
 			if err == nil {
@@ -118,8 +119,12 @@ func TestOpenEntryPointsRecordReadOnlyFailure(t *testing.T) {
 			if f == nil || f.Path != path || f.File != "old.db" || f.Error == "" {
 				t.Errorf("GetReadOnlyOpenFailure = %+v; want the path, file name, and error", f)
 			}
-			if app.store != nil {
-				t.Errorf("a store is open after the failed open; the UI resets to no database")
+			// The new store opens before the old one closes, so a failed open
+			// leaves the first database open, current, and usable.
+			if app.store != first {
+				t.Errorf("app.store changed after the failed open; want the first database still current")
+			} else if _, err := app.store.CountEvents("", nil); err != nil {
+				t.Errorf("first database unusable after the failed open: %v", err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil {

@@ -37,7 +37,7 @@ type App struct {
 
 	// lastImportFailure is the failure from the most recent ImportCSV call,
 	// read by the frontend's failure dialog (GetLastImportFailure).
-	// importFailMu guards it and lastReadOnlyOpen.
+	// importFailMu guards it, lastReadOnlyOpen, and lastOpenFailure.
 	lastImportFailure *ImportFailure
 	importFailMu      sync.Mutex
 
@@ -45,6 +45,10 @@ type App struct {
 	// the database needs a migration and is on read-only storage
 	// (GetReadOnlyOpenFailure).
 	lastReadOnlyOpen *ReadOnlyOpenFailure
+
+	// lastOpenFailure is set when the most recent open, connect, or create
+	// failed for any other reason (GetOpenFailure).
+	lastOpenFailure *OpenFailure
 }
 
 // NewApp creates a new App instance.
@@ -192,8 +196,9 @@ func (a *App) CloseDatabase() {
 // OpenDatabase opens a file dialog and loads an existing database.
 func (a *App) OpenDatabase() (*DBInfo, error) {
 	// Clear here as well as in loadDatabase, so a cancelled dialog does not
-	// leave an earlier read-only failure for the frontend to find.
+	// leave an earlier failure for the frontend to find.
 	a.setReadOnlyOpenFailure(nil)
+	a.setOpenFailure(nil)
 	path, err := openDatabaseDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "Open 4n6time Database",
 		Filters: []runtime.FileFilter{
@@ -630,6 +635,21 @@ func (a *App) countCombined(evidenceSQL string, evidenceArgs []interface{}, note
 	return evidence + notes, nil
 }
 
+// countUnfiltered is countCombined for a query with no WHERE: the evidence
+// count comes from the cache (evidenceCount) instead of counting
+// log2timeline, and the notes count stays live.
+func (a *App) countUnfiltered(notesSQL string, notesArgs []interface{}) (int64, error) {
+	evidence, err := a.evidenceCount()
+	if err != nil {
+		return 0, fmt.Errorf("counting evidence: %w", err)
+	}
+	notes, err := a.store.ExecuteCountQuery(notesSQL, notesArgs)
+	if err != nil {
+		return 0, fmt.Errorf("counting examiner notes: %w", err)
+	}
+	return evidence + notes, nil
+}
+
 // QueryEventsPage returns a page of events matching the given filters.
 type QueryRequest struct {
 	Filters    []FilterItem `json:"filters"`
@@ -693,7 +713,13 @@ func (a *App) QueryEvents(req QueryRequest) (*QueryResponse, error) {
 	notesCountSQL, notesCountArgs := q.BuildNotesCount()
 
 	// A failed count leaves the total at 0 rather than failing the page, as before.
-	totalCount, err := a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
+	// With no WHERE at all, the evidence half comes from the cached event count.
+	var totalCount int64
+	if where, _ := q.BuildWhere(); where == "" {
+		totalCount, err = a.countUnfiltered(notesCountSQL, notesCountArgs)
+	} else {
+		totalCount, err = a.countCombined(countSQL, countArgs, notesCountSQL, notesCountArgs)
+	}
 	if err != nil {
 		a.logError("Query count error: " + err.Error())
 		totalCount = 0
@@ -1359,19 +1385,16 @@ func (a *App) ConnectPostgres(host, port, dbName, user, password, sslMode string
 	}
 	connStr := u.String()
 
-	// Close any existing database
-	if a.store != nil {
-		a.store.Close()
-		a.store = nil
-	}
-
+	// Open the new store first; the current database stays open if this fails.
+	a.setOpenFailure(nil)
 	store, err := database.OpenStore("postgres", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to PostgreSQL: %w", err)
+		wrapped := fmt.Errorf("connecting to PostgreSQL: %w", err)
+		a.recordOpenFailure("postgres", openActionConnect, database.MaskConnStr(connStr), wrapped)
+		return nil, wrapped
 	}
 
-	a.store = store
-	a.driver = "postgres"
+	a.switchStore(store, "postgres")
 	a.logInfo("Connected to PostgreSQL: " + database.MaskConnStr(connStr))
 	return a.getDBInfo()
 }
@@ -1397,19 +1420,16 @@ func (a *App) CreatePostgresDatabase(host, port, dbName, user, password, sslMode
 	}
 	connStr := u.String()
 
-	// Close any existing database
-	if a.store != nil {
-		a.store.Close()
-		a.store = nil
-	}
-
+	// Open the new store first; the current database stays open if this fails.
+	a.setOpenFailure(nil)
 	store, err := database.CreateStore("postgres", connStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating PostgreSQL schema: %w", err)
+		wrapped := fmt.Errorf("creating PostgreSQL schema: %w", err)
+		a.recordOpenFailure("postgres", openActionCreate, database.MaskConnStr(connStr), wrapped)
+		return nil, wrapped
 	}
 
-	a.store = store
-	a.driver = "postgres"
+	a.switchStore(store, "postgres")
 	a.logInfo("Created PostgreSQL schema and connected: " + database.MaskConnStr(connStr))
 	return a.getDBInfo()
 }
@@ -1444,7 +1464,7 @@ func (a *App) PushToPostgres(host, port, dbName, user, password, sslMode string)
 	a.logInfo("Push to PostgreSQL started: " + database.MaskConnStr(connStr))
 
 	// Verify SQLite has data before creating the PostgreSQL schema
-	sourceCount, err := a.store.CountEvents("", nil)
+	sourceCount, err := a.evidenceCount()
 	if err != nil {
 		return "", fmt.Errorf("counting SQLite events: %w", err)
 	}
@@ -1844,30 +1864,41 @@ type DBInfo struct {
 
 func (a *App) loadDatabase(path string) (*DBInfo, error) {
 	a.setReadOnlyOpenFailure(nil)
+	a.setOpenFailure(nil)
 
-	// Close any existing database
-	if a.store != nil {
-		a.store.Close()
-		a.store = nil
-	}
-
+	// Open the new store first; the current database stays open and current
+	// if this fails. The frontend saves the current tab session before it
+	// calls OpenDatabase.
 	store, err := database.OpenStore("sqlite", path)
 	if err != nil {
+		wrapped := fmt.Errorf("opening database: %w", err)
 		if errors.Is(err, database.ErrReadOnlyUpgrade) {
 			a.logWarn("Database on read-only storage needs an upgrade and was not opened: " + path + ": " + err.Error())
 			a.setReadOnlyOpenFailure(&ReadOnlyOpenFailure{Path: path, File: filepath.Base(path), Error: err.Error()})
+		} else {
+			a.recordOpenFailure("sqlite", openActionOpen, path, wrapped)
 		}
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, wrapped
 	}
 
-	a.store = store
-	a.driver = "sqlite"
+	a.switchStore(store, "sqlite")
 	a.logInfo("Database opened: " + path)
 	return a.getDBInfo()
 }
 
+// switchStore makes store the open database, closing the previous one. Open,
+// connect, and create paths call it only after the new store opened, so a
+// failed open never leaves the app with no database.
+func (a *App) switchStore(store database.Store, driver string) {
+	if a.store != nil && a.store != store {
+		a.CloseDatabase()
+	}
+	a.store = store
+	a.driver = driver
+}
+
 func (a *App) getDBInfo() (*DBInfo, error) {
-	count, err := a.store.CountEvents("", nil)
+	count, err := a.evidenceCount()
 	if err != nil {
 		return nil, err
 	}

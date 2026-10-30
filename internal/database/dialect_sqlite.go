@@ -138,3 +138,10 @@ func (d *SQLiteDialect) InsertImportSQL() string {
 func (d *SQLiteDialect) AddImportErrorColumnSQL() string {
 	return `ALTER TABLE l2t_imports ADD COLUMN error_message TEXT`
 }
+
+func (d *SQLiteDialect) CreateStatsTableSQL() string {
+	return `CREATE TABLE IF NOT EXISTS l2t_stats (
+		key TEXT PRIMARY KEY,
+		value INTEGER
+	)`
+}

@@ -65,6 +65,9 @@ func main() {
 	})
 
 	toolsMenu := appMenu.AddSubmenu("Tools")
+	toolsMenu.AddText("Recount Events", nil, func(cd *menu.CallbackData) {
+		runtime.EventsEmit(app.ctx, "menu:recount-events")
+	})
 	toolsMenu.AddText("Settings...", nil, func(cd *menu.CallbackData) {
 		runtime.EventsEmit(app.ctx, "menu:settings")
 	})

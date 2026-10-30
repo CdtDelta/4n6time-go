@@ -81,6 +81,14 @@ type Store interface {
 	GetImports() ([]model.ImportRecord, error)
 	GetImport(id int64) (*model.ImportRecord, error)
 
+	// Cached statistics in l2t_stats (see StatEventCount). GetStat's ok is
+	// false when the key has no row. InsertStatIfMissing leaves an existing row
+	// unchanged; SetStat replaces it. InsertEvent and InsertEvents add the
+	// inserted count to StatEventCount in their own transaction.
+	GetStat(key string) (value int64, ok bool, err error)
+	InsertStatIfMissing(key string, value int64) error
+	SetStat(key string, value int64) error
+
 	// Schema and maintenance
 	UpdateMetadata() error
 	RebuildIndexes(fields []string) error
